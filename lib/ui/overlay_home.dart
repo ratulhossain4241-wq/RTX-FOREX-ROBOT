@@ -105,7 +105,8 @@ class _OverlayHomeState extends State<OverlayHome> {
   /// একটা নির্দেশনা দেখানো হয়।
   void _showSettingsHint() {
     setState(() {
-      _statusMessageBn = 'Risk Settings পরিবর্তন করতে মূল RTX Auto Trader অ্যাপ (হোম স্ক্রিন থেকে) খুলে সেখান থেকে Risk Settings-এ যান।';
+      _statusMessageBn =
+          'Risk Settings পরিবর্তন করতে মূল RTX Auto Trader অ্যাপ (হোম স্ক্রিন থেকে) খুলে সেখান থেকে Risk Settings-এ যান।';
     });
   }
 
@@ -247,31 +248,50 @@ class _OverlayHomeState extends State<OverlayHome> {
     );
   }
 
+  /// ✅ ফিক্স: আগে একটাই Row-তে নাম + মার্কেট bge + settings আইকন +
+  /// সময় গাদাগাদি করে বসানো ছিল, ফলে সরু বাবল উইন্ডোতে Flexible/Spacer
+  /// এর flex হিসাব ঘেঁটে গিয়ে মার্কেট নাম কখনো প্রায় শূন্য জায়গা পেয়ে
+  /// দেখাই যাচ্ছিল না। এখন দুই সারিতে ভাগ করা হলো — নিচের সারিতে
+  /// Expanded দিয়ে মার্কেট bge পুরো প্রস্থ নিশ্চিত পায়, তাই আর কখনো
+  /// চেপে গিয়ে অদৃশ্য হবে না।
   Widget _header() {
-    return Row(
+    return Column(
       children: [
-        const Text('RTX AUTO', style: TextStyle(color: T.green, fontSize: 12, fontWeight: FontWeight.w900)),
-        const Spacer(),
-        Flexible(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: T.gold.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: T.gold.withOpacity(0.6)),
+        Row(
+          children: [
+            const Text('RTX AUTO', style: TextStyle(color: T.green, fontSize: 12, fontWeight: FontWeight.w900)),
+            const Spacer(),
+            Text(_time, style: const TextStyle(color: T.dim, fontSize: 11)),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: T.gold.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: T.gold.withOpacity(0.6)),
+                ),
+                child: Text(_market.name,
+                    textAlign: TextAlign.center,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: T.gold, fontSize: 13, fontWeight: FontWeight.w900)),
+              ),
             ),
-            child: Text(_market.name,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: T.gold, fontSize: 12, fontWeight: FontWeight.w900)),
-          ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _showSettingsHint,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(color: T.card, borderRadius: BorderRadius.circular(6)),
+                child: const Icon(Icons.settings, color: T.dim, size: 18),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 6),
-        GestureDetector(
-          onTap: _showSettingsHint,
-          child: const Icon(Icons.settings, color: T.dim, size: 18),
-        ),
-        const SizedBox(width: 8),
-        Text(_time, style: const TextStyle(color: T.dim, fontSize: 11)),
       ],
     );
   }
