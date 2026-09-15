@@ -1,6 +1,6 @@
 package com.rtxauto.rtx_auto_trader
 
-import android.content.Context
+import android.content.ComponentName
 import android.content.Intent
 import android.provider.Settings
 import android.text.TextUtils
@@ -8,10 +8,6 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-/// Dart আর নেটিভ Android কোডের মধ্যে সেতু। এই চ্যানেল দিয়েই Dart সাইড
-/// থেকে Accessibility permission চেক করা, সেটিংস খোলা, আর node dump
-/// ট্রিগার করা হবে — Node Dumper আর পরে Trade Executor দুটোই এই একই
-/// MethodChannel ব্যবহার করবে (মেথড নাম অনুযায়ী আলাদা হবে)।
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "rtx_auto_trader/native"
 
@@ -68,10 +64,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// Android-এর সিস্টেম সেটিংস থেকে চেক করে আমাদের NodeDumperService
-    /// আসলেই এনাবল করা আছে কি না — এটা না থাকলে dumpNow() কল করা অর্থহীন।
+    /// ✅ ফিক্স: আগে "$packageName/.NodeDumperService" এই শর্টকাট ফর্মের
+    /// সাথে সরাসরি স্ট্রিং তুলনা করা হতো, কিন্তু Android ENABLED_ACCESSIBILITY_SERVICES
+    /// এ সবসময় সম্পূর্ণ ক্লাস পাথ (package.ClassName) সেভ করে রাখে, শর্টকাট
+    /// ফর্ম না। তাই তুলনা কখনো মিলছিল না। এখন ComponentName দিয়ে সঠিকভাবে
+    /// পার্স করে package আর className আলাদাভাবে মিলানো হচ্ছে।
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponent = "$packageName/.NodeDumperService"
         val enabledServices = Settings.Secure.getString(
             contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
@@ -79,7 +77,19 @@ class MainActivity : FlutterActivity() {
 
         if (TextUtils.isEmpty(enabledServices)) return false
 
-        return enabledServices.split(":").any { it.equals(expectedComponent, ignoreCase = true) }
+        val splitter = TextUtils.SimpleStringSplitter(':')
+        splitter.setString(enabledServices)
+
+        while (splitter.hasNext()) {
+            val componentString = splitter.next()
+            val component = ComponentName.unflattenFromString(componentString) ?: continue
+            if (component.packageName == packageName &&
+                component.className == "$packageName.NodeDumperService"
+            ) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun dumpDir(): java.io.File {
