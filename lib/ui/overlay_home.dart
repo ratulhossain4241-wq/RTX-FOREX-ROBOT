@@ -14,7 +14,6 @@ import '../core/trade_logger.dart';
 import '../engine/signal_router.dart';
 import '../engine/signal_enricher.dart';
 import 'chart_painter.dart';
-import 'settings_sheet.dart';
 
 class OverlayHome extends StatefulWidget {
   const OverlayHome({super.key});
@@ -26,6 +25,7 @@ class OverlayHome extends StatefulWidget {
 class _OverlayHomeState extends State<OverlayHome> {
   String _time = '--:--:--';
   Timer? _clockTimer;
+  Timer? _marketPollTimer;
   bool _scanning = false;
   bool _aiThinking = false;
   bool _autoMode = false;
@@ -46,13 +46,37 @@ class _OverlayHomeState extends State<OverlayHome> {
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _time = DateFormat('HH:mm:ss').format(DateTime.now()));
     });
+
+    // ✅ ফিক্স: বাবল আর মেইন অ্যাপ দুইটা আলাদা Flutter engine-এ চলে,
+    // তাই মেইন অ্যাপে মার্কেট বদলালে বাবল সেটা স্বয়ংক্রিয়ভাবে জানতে
+    // পারে না। প্রতি ২ সেকেন্ডে SharedPreferences থেকে টাটকা মার্কেট
+    // চেক করে এই সমস্যা সমাধান করা হলো।
+    _marketPollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollMarket());
+
     _loadInitial();
   }
 
   @override
   void dispose() {
     _clockTimer?.cancel();
+    _marketPollTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _pollMarket() async {
+    final marketTd = await Store.market();
+    if (!mounted) return;
+    if (marketTd != _market.td) {
+      final next = kMarkets.firstWhere((m) => m.td == marketTd, orElse: () => kMarkets.first);
+      setState(() {
+        _market = next;
+        // মার্কেট বদলালে পুরনো সিগন্যাল/চার্ট আর প্রাসঙ্গিক না, তাই রিসেট করা হচ্ছে
+        _lastSignal = null;
+        _enriched = null;
+        _chartCandles = [];
+        _statusMessageBn = null;
+      });
+    }
   }
 
   Future<void> _loadInitial() async {
@@ -75,13 +99,14 @@ class _OverlayHomeState extends State<OverlayHome> {
     setState(() => _autoMode = next);
   }
 
-  void _openSettings() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (_) => const SettingsSheet(),
-    );
+  /// ✅ ফিক্স: আগে এখানে showModalBottomSheet(SettingsSheet) খোলা হতো,
+  /// কিন্তু overlay window-এ সিস্টেম কীবোর্ড আসে না বলে টাইপ করা যেত
+  /// না। তাই এখন Risk Settings মেইন অ্যাপে সরানো হয়েছে — এখানে শুধু
+  /// একটা নির্দেশনা দেখানো হয়।
+  void _showSettingsHint() {
+    setState(() {
+      _statusMessageBn = 'Risk Settings পরিবর্তন করতে মূল RTX Auto Trader অ্যাপ (হোম স্ক্রিন থেকে) খুলে সেখান থেকে Risk Settings-এ যান।';
+    });
   }
 
   Future<void> _generate() async {
@@ -147,7 +172,6 @@ class _OverlayHomeState extends State<OverlayHome> {
       return;
     }
 
-    // ✅ AI + ১১-ইন্ডিকেটর ইঞ্জিন দিয়ে সিগন্যাল সমৃদ্ধ করা হচ্ছে
     setState(() {
       _scanning = false;
       _aiThinking = true;
@@ -243,7 +267,7 @@ class _OverlayHomeState extends State<OverlayHome> {
         ),
         const SizedBox(width: 6),
         GestureDetector(
-          onTap: _openSettings,
+          onTap: _showSettingsHint,
           child: const Icon(Icons.settings, color: T.dim, size: 18),
         ),
         const SizedBox(width: 8),
