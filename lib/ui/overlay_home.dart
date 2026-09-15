@@ -1,0 +1,430 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter_overlay_window/flutter_overlay_window.dart';
+import 'package:intl/intl.dart';
+import '../core/constants.dart';
+import '../core/store.dart';
+import '../core/models.dart';
+import '../core/api_client.dart';
+import '../core/pip_utils.dart';
+import '../core/market_hours.dart';
+import '../core/mode_meta.dart';
+import '../core/risk_engine.dart';
+import '../core/trade_logger.dart';
+import '../engine/signal_router.dart';
+import 'chart_painter.dart';
+
+/// ফ্লোটিং বাবলের মূল উইজেট — একটা আলাদা Flutter engine-এ চলে
+/// (main.dart-এর overlayMain() entry point থেকে)। এখানেই সব
+/// লেয়ার (Data → Router → Risk Gate → Logger) একত্র হয়।
+class OverlayHome extends StatefulWidget {
+  const OverlayHome({super.key});
+
+  @override
+  State<OverlayHome> createState() => _OverlayHomeState();
+}
+
+class _OverlayHomeState extends State<OverlayHome> {
+  String _time = '--:--:--';
+  Timer? _clockTimer;
+  bool _scanning = false;
+  bool _autoMode = false;
+
+  MarketDef _market = kMarkets.first;
+  List<Candle> _chartCandles = [];
+  RouterSignal? _lastSignal;
+  ModeMeta? _lastSignalMode;
+  String? _statusMessageBn;
+  String? _riskBlockedReasonBn;
+  double? _approvedLotSize;
+  int _todayWon = 0, _todayLost = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _time = DateFormat('HH:mm:ss').format(DateTime.now()));
+    });
+    _loadInitial();
+  }
+
+  @override
+  void dispose() {
+    _clockTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _loadInitial() async {
+    final marketTd = await Store.market();
+    final auto = await Store.autoMode();
+    final wl = await TradeLogger.todaysWinLossCount();
+    if (!mounted) return;
+    setState(() {
+      _market = kMarkets.firstWhere((m) => m.td == marketTd, orElse: () => kMarkets.first);
+      _autoMode = auto;
+      _todayWon = wl['won'] ?? 0;
+      _todayLost = wl['lost'] ?? 0;
+    });
+  }
+
+  Future<void> _toggleAuto() async {
+    final next = !_autoMode;
+    await Store.setAutoMode(next);
+    if (!mounted) return;
+    setState(() => _autoMode = next);
+  }
+
+  /// ৪টা স্ট্র্যাটেজি মোড একে একে চালিয়ে দেখে — যেটায় প্রথম ভ্যালিড
+  /// সিগন্যাল পাওয়া যায় সেটাই ব্যবহার করে। কোনোটাতেই সিগন্যাল না পেলে
+  /// প্রতিটার কারণ (blocked reason) সংগ্রহ করে ইউজারকে জানায়।
+  Future<void> _generate() async {
+    if (!isForexMarketOpen()) {
+      setState(() {
+        _statusMessageBn = '🔴 Market Closed — খুলবে ${nextOpenDayLabel()}';
+        _lastSignal = null;
+      });
+      return;
+    }
+
+    final tdKey = await Store.twelveDataKey();
+    if (tdKey.isEmpty) {
+      setState(() => _statusMessageBn = '⚠️ Twelve Data API Key নেই — মূল অ্যাপে সেভ করুন।');
+      return;
+    }
+
+    setState(() {
+      _scanning = true;
+      _statusMessageBn = null;
+      _lastSignal = null;
+      _riskBlockedReasonBn = null;
+    });
+
+    final fetch = await ApiClient.fetchAllTimeframes(apiKey: tdKey, symbol: _market.td);
+    if (!mounted) return;
+
+    if (fetch.timeframes['15m'] == null) {
+      setState(() {
+        _scanning = false;
+        _statusMessageBn = fetch.errors['15m'] ?? '15m ডেটা আনতে ব্যর্থ।';
+      });
+      return;
+    }
+
+    setState(() => _chartCandles = fetch.timeframes['15m']!);
+
+    RouterSignal? best;
+    ModeMeta? bestMode;
+    final blockedReasons = <String>[];
+
+    for (final mode in kSignalModes) {
+      final result = generateRouterSignal(
+        modeId: mode.id,
+        timeframes: fetch.timeframes,
+        marketTd: _market.td,
+        marketCategory: _market.cat,
+      );
+      if (!result.noSignal) {
+        // আগেরটার চেয়ে ভালো R:R পেলে বেছে নেওয়া হয়
+        if (best == null || (result.rr ?? 0) > (best.rr ?? 0)) {
+          best = result;
+          bestMode = mode;
+        }
+      } else if (result.debugReasonBn != null) {
+        blockedReasons.add('${mode.name}: ${result.debugReasonBn}');
+      }
+    }
+
+    if (best == null) {
+      setState(() {
+        _scanning = false;
+        _statusMessageBn = 'কোনো মোডেই এই মুহূর্তে শক্তিশালী সিগন্যাল নেই।';
+      });
+      return;
+    }
+
+    // রিস্ক গেট — লট সাইজ অনুমোদন বা প্রত্যাখ্যান
+    final strat = best.strategy!;
+    final pipValue = pipValuePerStandardLot(_market.td, strat.entry!) ?? 0;
+    final openTrades = await TradeLogger.openTrades();
+    final riskResult = await RiskEngine.canOpenNewTrade(
+      currentOpenTradesCount: openTrades.length,
+      slPips: best.slPips!,
+      pipValueUsd: pipValue,
+    );
+
+    if (!mounted) return;
+    setState(() {
+      _scanning = false;
+      _lastSignal = best;
+      _lastSignalMode = bestMode;
+      _riskBlockedReasonBn = riskResult.blocked ? riskResult.reasonBn : null;
+      _approvedLotSize = riskResult.approvedLotSize;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final signal = _lastSignal;
+    final strat = signal?.strategy;
+    final borderColor = strat == null
+        ? T.green
+        : (strat.direction == 'LONG' ? T.green : T.red);
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        margin: const EdgeInsets.all(4),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xF20A0A0A),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: borderColor, width: 1.5),
+        ),
+        child: Column(
+          children: [
+            _header(),
+            const SizedBox(height: 10),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const ClampingScrollPhysics(),
+                child: Column(
+                  children: [
+                    _chart(),
+                    const SizedBox(height: 10),
+                    _signalBox(),
+                    const SizedBox(height: 8),
+                    _statsRow(),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
+            _actionRow(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Row(
+      children: [
+        const Text('RTX AUTO', style: TextStyle(color: T.green, fontSize: 12, fontWeight: FontWeight.w900)),
+        const Spacer(),
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: T.gold.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: T.gold.withOpacity(0.6)),
+            ),
+            child: Text(_market.name,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: T.gold, fontSize: 12, fontWeight: FontWeight.w900)),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(_time, style: const TextStyle(color: T.dim, fontSize: 11)),
+      ],
+    );
+  }
+
+  Widget _chart() {
+    if (_chartCandles.isEmpty) {
+      return Container(
+        height: 90,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.black,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: T.muted),
+        ),
+        child: const Text('NO CHART YET', style: TextStyle(color: T.dim, fontSize: 11)),
+      );
+    }
+    final list = _chartCandles.length > 20
+        ? _chartCandles.sublist(_chartCandles.length - 20)
+        : _chartCandles;
+
+    final strat = _lastSignal?.strategy;
+    final levels = <String, double>{};
+    final levelColors = <String, Color>{};
+    if (strat != null) {
+      levels['Entry'] = strat.entry!;
+      levels['SL'] = strat.sl!;
+      levels['TP1'] = strat.tp1!;
+      levelColors['Entry'] = T.cyan;
+      levelColors['SL'] = T.red;
+      levelColors['TP1'] = T.green;
+    }
+
+    return Container(
+      height: 100,
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: T.muted),
+      ),
+      child: CustomPaint(
+        size: Size.infinite,
+        painter: CandleChartPainter(candles: list, levelLines: levels, levelColors: levelColors),
+      ),
+    );
+  }
+
+  Widget _statsRow() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(color: T.card, borderRadius: BorderRadius.circular(8)),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          Text('আজ: $_todayWon W / $_todayLost L', style: const TextStyle(color: T.dim, fontSize: 11)),
+          Row(
+            children: [
+              const Text('AUTO', style: TextStyle(color: T.dim, fontSize: 11)),
+              Switch(
+                value: _autoMode,
+                onChanged: (_) => _toggleAuto(),
+                activeColor: T.green,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _signalBox() {
+    if (_scanning) {
+      return const Padding(
+        padding: EdgeInsets.all(14),
+        child: Text('SCANNING (৪টি মোড যাচাই হচ্ছে)...',
+            textAlign: TextAlign.center, style: TextStyle(color: T.green, fontWeight: FontWeight.bold, fontSize: 13)),
+      );
+    }
+
+    if (_statusMessageBn != null) {
+      return Padding(
+        padding: const EdgeInsets.all(14),
+        child: Text(_statusMessageBn!,
+            textAlign: TextAlign.center, style: const TextStyle(color: T.gold, fontSize: 12)),
+      );
+    }
+
+    final signal = _lastSignal;
+    final strat = signal?.strategy;
+    if (signal == null || strat == null) {
+      return const Padding(
+        padding: EdgeInsets.all(14),
+        child: Text('[ READY ] Tap SIGNAL',
+            textAlign: TextAlign.center, style: TextStyle(color: T.dim, fontWeight: FontWeight.bold, fontSize: 12)),
+      );
+    }
+
+    final directionColor = strat.direction == 'LONG' ? T.green : T.red;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: T.card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: directionColor.withOpacity(0.5)),
+      ),
+      child: Column(
+        children: [
+          Text(_lastSignalMode?.name ?? '',
+              style: TextStyle(color: _lastSignalMode?.color ?? T.gold, fontSize: 12, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text(strat.direction ?? '-',
+              style: TextStyle(color: directionColor, fontSize: 20, fontWeight: FontWeight.w900)),
+          const SizedBox(height: 4),
+          Text('Strength: ${strat.strength}',
+              style: const TextStyle(color: T.dim, fontSize: 11)),
+          const Divider(color: T.muted, height: 18),
+          _priceRow('Entry', strat.entry!),
+          _priceRow('SL', strat.sl!, color: T.red),
+          _priceRow('TP1', strat.tp1!, color: T.green),
+          _priceRow('TP2', strat.tp2!, color: T.green),
+          _priceRow('TP3', strat.tp3!, color: T.green),
+          const SizedBox(height: 6),
+          Text('R:R  1:${signal.rr!.toStringAsFixed(2)}',
+              style: const TextStyle(color: T.cyan, fontSize: 12, fontWeight: FontWeight.bold)),
+          if (_approvedLotSize != null) ...[
+            const SizedBox(height: 4),
+            Text('অনুমোদিত Lot Size: $_approvedLotSize',
+                style: const TextStyle(color: T.gold, fontSize: 11)),
+          ],
+          if (_riskBlockedReasonBn != null) ...[
+            const SizedBox(height: 8),
+            Text('🚫 $_riskBlockedReasonBn',
+                textAlign: TextAlign.center, style: const TextStyle(color: T.red, fontSize: 11)),
+          ],
+          if (strat.detail != null) ...[
+            const SizedBox(height: 8),
+            Text(strat.detail!,
+                textAlign: TextAlign.center,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: T.dim, fontSize: 10)),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _priceRow(String label, double value, {Color color = T.dim}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(color: T.dim, fontSize: 11)),
+          Text(formatPrice(value, _market.td), style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _actionRow() {
+    return Row(
+      children: [
+        Expanded(
+          child: GestureDetector(
+            onTap: _scanning ? null : _generate,
+            child: Container(
+              padding: const EdgeInsets.symmetric(vertical: 13),
+              decoration: BoxDecoration(
+                color: T.green.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: T.green),
+              ),
+              child: Center(
+                child: Text(
+                  _scanning ? 'SCAN...' : '🚀 SIGNAL',
+                  style: const TextStyle(color: T.green, fontWeight: FontWeight.w900, fontSize: 14),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: () => FlutterOverlayWindow.closeOverlay(),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+            decoration: BoxDecoration(
+              color: T.card,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: T.muted),
+            ),
+            child: const Text('✕', style: TextStyle(fontSize: 16, color: T.red)),
+          ),
+        ),
+      ],
+    );
+  }
+}
