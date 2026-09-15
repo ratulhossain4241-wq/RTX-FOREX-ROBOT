@@ -1,0 +1,70 @@
+name: Build RTX Auto Trader APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.24.5"
+
+      - name: Generate Android platform files
+        run: |
+          flutter create --org com.rtxauto --project-name rtx_auto_trader --platforms=android .
+
+      - name: Patch AndroidManifest for overlay + storage
+        run: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+
+          # প্রয়োজনীয় পারমিশন <application> ট্যাগের আগে যোগ করা হচ্ছে
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"\/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n\n    <application|' "$MANIFEST"
+
+          # Overlay service — flutter_overlay_window প্যাকেজের বাধ্যতামূলক অংশ
+          sed -i 's|<\/application>|        <service\n            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"\n            android:exported="false"\n            android:foregroundServiceType="specialUse" \/>\n    <\/application>|' "$MANIFEST"
+
+          echo "----- AndroidManifest.xml -----"
+          cat "$MANIFEST"
+
+      - name: Set minSdk 24
+        run: |
+          # flutter_overlay_window ও sqflite-এর জন্য minSdk 24 প্রয়োজন
+          if grep -q "minSdk" android/app/build.gradle; then
+            sed -i 's/minSdk = .*/minSdk = 24/' android/app/build.gradle || true
+            sed -i 's/minSdkVersion .*/minSdkVersion 24/' android/app/build.gradle || true
+          fi
+          if [ -f android/app/build.gradle.kts ]; then
+            sed -i 's/minSdk = .*/minSdk = 24/' android/app/build.gradle.kts || true
+          fi
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze (non-blocking, shows warnings only)
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings || true
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: RTX-AUTO-TRADER-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
