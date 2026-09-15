@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 class T {
   static const bg = Color(0xFF0A0A0A);
   static const card = Color(0xFF0D1117);
+  static const panel = Color(0xFF11161C);
   static const green = Color(0xFF00FF41);
   static const red = Color(0xFFFF0040);
   static const gold = Color(0xFFFFCC00);
