@@ -29,22 +29,33 @@ jobs:
         run: |
           flutter create --org com.rtxauto --project-name rtx_auto_trader --platforms=android .
 
-      - name: Patch AndroidManifest for overlay + storage
+      - name: Copy custom native Android files
+        run: |
+          PKG_DIR="android/app/src/main/kotlin/com/rtxauto/rtx_auto_trader"
+          mkdir -p "$PKG_DIR"
+          mkdir -p android/app/src/main/res/xml
+
+          cp native_android/kotlin/com/rtxauto/rtx_auto_trader/MainActivity.kt "$PKG_DIR/MainActivity.kt"
+          cp native_android/kotlin/com/rtxauto/rtx_auto_trader/NodeDumperService.kt "$PKG_DIR/NodeDumperService.kt"
+          cp native_android/res/xml/accessibility_dumper_config.xml android/app/src/main/res/xml/accessibility_dumper_config.xml
+
+          echo "----- কপি হওয়া ফাইলসমূহ -----"
+          ls -la "$PKG_DIR"
+          ls -la android/app/src/main/res/xml
+
+      - name: Patch AndroidManifest for overlay + accessibility dumper
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
 
-          # প্রয়োজনীয় পারমিশন <application> ট্যাগের আগে যোগ করা হচ্ছে
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"\/>\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"\/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"\/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"\/>\n\n    <application|' "$MANIFEST"
 
-          # Overlay service — flutter_overlay_window প্যাকেজের বাধ্যতামূলক অংশ
-          sed -i 's|<\/application>|        <service\n            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"\n            android:exported="false"\n            android:foregroundServiceType="specialUse" \/>\n    <\/application>|' "$MANIFEST"
+          sed -i 's|<\/application>|        <service\n            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"\n            android:exported="false"\n            android:foregroundServiceType="specialUse" \/>\n\n        <service\n            android:name=".NodeDumperService"\n            android:exported="true"\n            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">\n            <intent-filter>\n                <action android:name="android.accessibilityservice.AccessibilityService" \/>\n            <\/intent-filter>\n            <meta-data\n                android:name="android.accessibilityservice.config"\n                android:resource="@xml\/accessibility_dumper_config" \/>\n        <\/service>\n    <\/application>|' "$MANIFEST"
 
           echo "----- AndroidManifest.xml -----"
           cat "$MANIFEST"
 
       - name: Set minSdk 24
         run: |
-          # flutter_overlay_window ও sqflite-এর জন্য minSdk 24 প্রয়োজন
           if grep -q "minSdk" android/app/build.gradle; then
             sed -i 's/minSdk = .*/minSdk = 24/' android/app/build.gradle || true
             sed -i 's/minSdkVersion .*/minSdkVersion 24/' android/app/build.gradle || true
