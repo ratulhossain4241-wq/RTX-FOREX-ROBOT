@@ -12,11 +12,10 @@ import '../core/mode_meta.dart';
 import '../core/risk_engine.dart';
 import '../core/trade_logger.dart';
 import '../engine/signal_router.dart';
+import '../engine/signal_enricher.dart';
 import 'chart_painter.dart';
+import 'settings_sheet.dart';
 
-/// ফ্লোটিং বাবলের মূল উইজেট — একটা আলাদা Flutter engine-এ চলে
-/// (main.dart-এর overlayMain() entry point থেকে)। এখানেই সব
-/// লেয়ার (Data → Router → Risk Gate → Logger) একত্র হয়।
 class OverlayHome extends StatefulWidget {
   const OverlayHome({super.key});
 
@@ -28,11 +27,13 @@ class _OverlayHomeState extends State<OverlayHome> {
   String _time = '--:--:--';
   Timer? _clockTimer;
   bool _scanning = false;
+  bool _aiThinking = false;
   bool _autoMode = false;
 
   MarketDef _market = kMarkets.first;
   List<Candle> _chartCandles = [];
   RouterSignal? _lastSignal;
+  EnrichedSignal? _enriched;
   ModeMeta? _lastSignalMode;
   String? _statusMessageBn;
   String? _riskBlockedReasonBn;
@@ -74,14 +75,21 @@ class _OverlayHomeState extends State<OverlayHome> {
     setState(() => _autoMode = next);
   }
 
-  /// ৪টা স্ট্র্যাটেজি মোড একে একে চালিয়ে দেখে — যেটায় প্রথম ভ্যালিড
-  /// সিগন্যাল পাওয়া যায় সেটাই ব্যবহার করে। কোনোটাতেই সিগন্যাল না পেলে
-  /// প্রতিটার কারণ (blocked reason) সংগ্রহ করে ইউজারকে জানায়।
+  void _openSettings() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => const SettingsSheet(),
+    );
+  }
+
   Future<void> _generate() async {
     if (!isForexMarketOpen()) {
       setState(() {
         _statusMessageBn = '🔴 Market Closed — খুলবে ${nextOpenDayLabel()}';
         _lastSignal = null;
+        _enriched = null;
       });
       return;
     }
@@ -96,6 +104,7 @@ class _OverlayHomeState extends State<OverlayHome> {
       _scanning = true;
       _statusMessageBn = null;
       _lastSignal = null;
+      _enriched = null;
       _riskBlockedReasonBn = null;
     });
 
@@ -114,7 +123,6 @@ class _OverlayHomeState extends State<OverlayHome> {
 
     RouterSignal? best;
     ModeMeta? bestMode;
-    final blockedReasons = <String>[];
 
     for (final mode in kSignalModes) {
       final result = generateRouterSignal(
@@ -124,13 +132,10 @@ class _OverlayHomeState extends State<OverlayHome> {
         marketCategory: _market.cat,
       );
       if (!result.noSignal) {
-        // আগেরটার চেয়ে ভালো R:R পেলে বেছে নেওয়া হয়
         if (best == null || (result.rr ?? 0) > (best.rr ?? 0)) {
           best = result;
           bestMode = mode;
         }
-      } else if (result.debugReasonBn != null) {
-        blockedReasons.add('${mode.name}: ${result.debugReasonBn}');
       }
     }
 
@@ -142,7 +147,23 @@ class _OverlayHomeState extends State<OverlayHome> {
       return;
     }
 
-    // রিস্ক গেট — লট সাইজ অনুমোদন বা প্রত্যাখ্যান
+    // ✅ AI + ১১-ইন্ডিকেটর ইঞ্জিন দিয়ে সিগন্যাল সমৃদ্ধ করা হচ্ছে
+    setState(() {
+      _scanning = false;
+      _aiThinking = true;
+      _lastSignal = best;
+      _lastSignalMode = bestMode;
+    });
+
+    final geminiKey = await Store.geminiKey();
+    final enriched = await enrichSignal(
+      router: best,
+      candles15m: fetch.timeframes['15m']!,
+      geminiApiKey: geminiKey,
+      marketName: _market.name,
+    );
+    if (!mounted) return;
+
     final strat = best.strategy!;
     final pipValue = pipValuePerStandardLot(_market.td, strat.entry!) ?? 0;
     final openTrades = await TradeLogger.openTrades();
@@ -154,9 +175,8 @@ class _OverlayHomeState extends State<OverlayHome> {
 
     if (!mounted) return;
     setState(() {
-      _scanning = false;
-      _lastSignal = best;
-      _lastSignalMode = bestMode;
+      _aiThinking = false;
+      _enriched = enriched;
       _riskBlockedReasonBn = riskResult.blocked ? riskResult.reasonBn : null;
       _approvedLotSize = riskResult.approvedLotSize;
     });
@@ -164,11 +184,8 @@ class _OverlayHomeState extends State<OverlayHome> {
 
   @override
   Widget build(BuildContext context) {
-    final signal = _lastSignal;
-    final strat = signal?.strategy;
-    final borderColor = strat == null
-        ? T.green
-        : (strat.direction == 'LONG' ? T.green : T.red);
+    final strat = _lastSignal?.strategy;
+    final borderColor = strat == null ? T.green : (strat.direction == 'LONG' ? T.green : T.red);
 
     return Material(
       color: Colors.transparent,
@@ -224,6 +241,11 @@ class _OverlayHomeState extends State<OverlayHome> {
                 style: const TextStyle(color: T.gold, fontSize: 12, fontWeight: FontWeight.w900)),
           ),
         ),
+        const SizedBox(width: 6),
+        GestureDetector(
+          onTap: _openSettings,
+          child: const Icon(Icons.settings, color: T.dim, size: 18),
+        ),
         const SizedBox(width: 8),
         Text(_time, style: const TextStyle(color: T.dim, fontSize: 11)),
       ],
@@ -235,17 +257,11 @@ class _OverlayHomeState extends State<OverlayHome> {
       return Container(
         height: 90,
         alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: T.muted),
-        ),
+        decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(8), border: Border.all(color: T.muted)),
         child: const Text('NO CHART YET', style: TextStyle(color: T.dim, fontSize: 11)),
       );
     }
-    final list = _chartCandles.length > 20
-        ? _chartCandles.sublist(_chartCandles.length - 20)
-        : _chartCandles;
+    final list = _chartCandles.length > 20 ? _chartCandles.sublist(_chartCandles.length - 20) : _chartCandles;
 
     final strat = _lastSignal?.strategy;
     final levels = <String, double>{};
@@ -262,15 +278,8 @@ class _OverlayHomeState extends State<OverlayHome> {
     return Container(
       height: 100,
       padding: const EdgeInsets.all(6),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: T.muted),
-      ),
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: CandleChartPainter(candles: list, levelLines: levels, levelColors: levelColors),
-      ),
+      decoration: BoxDecoration(color: Colors.black, borderRadius: BorderRadius.circular(8), border: Border.all(color: T.muted)),
+      child: CustomPaint(size: Size.infinite, painter: CandleChartPainter(candles: list, levelLines: levels, levelColors: levelColors)),
     );
   }
 
@@ -285,11 +294,7 @@ class _OverlayHomeState extends State<OverlayHome> {
           Row(
             children: [
               const Text('AUTO', style: TextStyle(color: T.dim, fontSize: 11)),
-              Switch(
-                value: _autoMode,
-                onChanged: (_) => _toggleAuto(),
-                activeColor: T.green,
-              ),
+              Switch(value: _autoMode, onChanged: (_) => _toggleAuto(), activeColor: T.green),
             ],
           ),
         ],
@@ -305,17 +310,23 @@ class _OverlayHomeState extends State<OverlayHome> {
             textAlign: TextAlign.center, style: TextStyle(color: T.green, fontWeight: FontWeight.bold, fontSize: 13)),
       );
     }
-
+    if (_aiThinking) {
+      return const Padding(
+        padding: EdgeInsets.all(14),
+        child: Text('Gemini AI যাচাই করছে...',
+            textAlign: TextAlign.center, style: TextStyle(color: T.cyan, fontWeight: FontWeight.bold, fontSize: 13)),
+      );
+    }
     if (_statusMessageBn != null) {
       return Padding(
         padding: const EdgeInsets.all(14),
-        child: Text(_statusMessageBn!,
-            textAlign: TextAlign.center, style: const TextStyle(color: T.gold, fontSize: 12)),
+        child: Text(_statusMessageBn!, textAlign: TextAlign.center, style: const TextStyle(color: T.gold, fontSize: 12)),
       );
     }
 
     final signal = _lastSignal;
     final strat = signal?.strategy;
+    final enriched = _enriched;
     if (signal == null || strat == null) {
       return const Padding(
         padding: EdgeInsets.all(14),
@@ -325,6 +336,7 @@ class _OverlayHomeState extends State<OverlayHome> {
     }
 
     final directionColor = strat.direction == 'LONG' ? T.green : T.red;
+    final agrees = enriched?.directionsAgree ?? true;
 
     return Container(
       width: double.infinity,
@@ -336,14 +348,39 @@ class _OverlayHomeState extends State<OverlayHome> {
       ),
       child: Column(
         children: [
-          Text(_lastSignalMode?.name ?? '',
-              style: TextStyle(color: _lastSignalMode?.color ?? T.gold, fontSize: 12, fontWeight: FontWeight.bold)),
+          Text(_lastSignalMode?.name ?? '', style: TextStyle(color: _lastSignalMode?.color ?? T.gold, fontSize: 12, fontWeight: FontWeight.bold)),
           const SizedBox(height: 6),
-          Text(strat.direction ?? '-',
-              style: TextStyle(color: directionColor, fontSize: 20, fontWeight: FontWeight.w900)),
+          Text(strat.direction ?? '-', style: TextStyle(color: directionColor, fontSize: 20, fontWeight: FontWeight.w900)),
           const SizedBox(height: 4),
-          Text('Strength: ${strat.strength}',
-              style: const TextStyle(color: T.dim, fontSize: 11)),
+          Text('Strength: ${strat.strength}', style: const TextStyle(color: T.dim, fontSize: 11)),
+          if (enriched != null) ...[
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: (agrees ? T.green : T.red).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: (agrees ? T.green : T.red).withOpacity(0.4)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    agrees ? '✅ AI ও ইঞ্জিন একমত' : '⚠️ AI ও স্ট্র্যাটেজি ভিন্নমত — সতর্ক থাকুন',
+                    style: TextStyle(color: agrees ? T.green : T.red, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 3),
+                  Text('Grade ${enriched.finalVerdict.grade} · Accuracy ${enriched.finalVerdict.accuracy}%',
+                      style: const TextStyle(color: T.cyan, fontSize: 11, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 3),
+                  Text(enriched.finalVerdict.reason,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: T.dim, fontSize: 10)),
+                ],
+              ),
+            ),
+          ],
           const Divider(color: T.muted, height: 18),
           _priceRow('Entry', strat.entry!),
           _priceRow('SL', strat.sl!, color: T.red),
@@ -351,25 +388,14 @@ class _OverlayHomeState extends State<OverlayHome> {
           _priceRow('TP2', strat.tp2!, color: T.green),
           _priceRow('TP3', strat.tp3!, color: T.green),
           const SizedBox(height: 6),
-          Text('R:R  1:${signal.rr!.toStringAsFixed(2)}',
-              style: const TextStyle(color: T.cyan, fontSize: 12, fontWeight: FontWeight.bold)),
+          Text('R:R  1:${signal.rr!.toStringAsFixed(2)}', style: const TextStyle(color: T.cyan, fontSize: 12, fontWeight: FontWeight.bold)),
           if (_approvedLotSize != null) ...[
             const SizedBox(height: 4),
-            Text('অনুমোদিত Lot Size: $_approvedLotSize',
-                style: const TextStyle(color: T.gold, fontSize: 11)),
+            Text('অনুমোদিত Lot Size: $_approvedLotSize', style: const TextStyle(color: T.gold, fontSize: 11)),
           ],
           if (_riskBlockedReasonBn != null) ...[
             const SizedBox(height: 8),
-            Text('🚫 $_riskBlockedReasonBn',
-                textAlign: TextAlign.center, style: const TextStyle(color: T.red, fontSize: 11)),
-          ],
-          if (strat.detail != null) ...[
-            const SizedBox(height: 8),
-            Text(strat.detail!,
-                textAlign: TextAlign.center,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: T.dim, fontSize: 10)),
+            Text('🚫 $_riskBlockedReasonBn', textAlign: TextAlign.center, style: const TextStyle(color: T.red, fontSize: 11)),
           ],
         ],
       ),
@@ -394,17 +420,13 @@ class _OverlayHomeState extends State<OverlayHome> {
       children: [
         Expanded(
           child: GestureDetector(
-            onTap: _scanning ? null : _generate,
+            onTap: (_scanning || _aiThinking) ? null : _generate,
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 13),
-              decoration: BoxDecoration(
-                color: T.green.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: T.green),
-              ),
+              decoration: BoxDecoration(color: T.green.withOpacity(0.15), borderRadius: BorderRadius.circular(10), border: Border.all(color: T.green)),
               child: Center(
                 child: Text(
-                  _scanning ? 'SCAN...' : '🚀 SIGNAL',
+                  _scanning ? 'SCAN...' : (_aiThinking ? 'AI...' : '🚀 SIGNAL'),
                   style: const TextStyle(color: T.green, fontWeight: FontWeight.w900, fontSize: 14),
                 ),
               ),
@@ -416,11 +438,7 @@ class _OverlayHomeState extends State<OverlayHome> {
           onTap: () => FlutterOverlayWindow.closeOverlay(),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-            decoration: BoxDecoration(
-              color: T.card,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: T.muted),
-            ),
+            decoration: BoxDecoration(color: T.card, borderRadius: BorderRadius.circular(10), border: Border.all(color: T.muted)),
             child: const Text('✕', style: TextStyle(fontSize: 16, color: T.red)),
           ),
         ),
