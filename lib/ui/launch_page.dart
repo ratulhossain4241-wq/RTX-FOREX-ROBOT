@@ -3,11 +3,9 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import '../core/constants.dart';
 import '../core/store.dart';
 import '../core/models.dart';
+import 'risk_settings_page.dart';
+import 'dumper_page.dart';
 
-/// অ্যাপ প্রথম চালু হলে এই স্ক্রিন দেখা যায় — API key, market, আর
-/// রিস্ক সেটিংস ঠিক করে তারপর ফ্লোটিং বাবল চালু করা যায়। কোনো একটা
-/// আবশ্যক জিনিস মিসিং থাকলে START বাটন কাজ করবে না, স্পষ্ট বাংলা
-/// বার্তা দেখাবে।
 class LaunchPage extends StatefulWidget {
   const LaunchPage({super.key});
 
@@ -114,7 +112,7 @@ class _LaunchPageState extends State<LaunchPage> {
       await Store.saveMarket(picked.td);
       setState(() {
         _selectedMarket = picked;
-        _statusMessage = 'Market সেট হয়েছে: ${picked.name}';
+        _statusMessage = 'Market সেট হয়েছে: ${picked.name} — বাবল খোলা থাকলে ২ সেকেন্ডের মধ্যে আপডেট হবে';
       });
     }
   }
@@ -227,6 +225,16 @@ class _LaunchPageState extends State<LaunchPage> {
               _textField(_balanceController, 'যেমন: 500', keyboardType: TextInputType.number),
               const SizedBox(height: 10),
               _outlineButton('SAVE BALANCE', _saveBalance),
+              const SizedBox(height: 10),
+              _outlineButton('⚙️ RISK SETTINGS (Risk %, Daily Loss, ইত্যাদি)', () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const RiskSettingsPage()));
+              }),
+
+              const SizedBox(height: 24),
+              const _SectionTitle('TOOLS'),
+              _outlineButton('📸 MT5 SCREEN SCANNER', () {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const DumperPage()));
+              }),
 
               const SizedBox(height: 28),
               SizedBox(
@@ -285,7 +293,7 @@ class _LaunchPageState extends State<LaunchPage> {
         padding: const EdgeInsets.symmetric(vertical: 12),
       ),
       onPressed: onTap,
-      child: Text(label, style: const TextStyle(color: T.green, fontWeight: FontWeight.bold)),
+      child: Text(label, textAlign: TextAlign.center, style: const TextStyle(color: T.green, fontWeight: FontWeight.bold, fontSize: 12)),
     );
   }
 }
