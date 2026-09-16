@@ -2,8 +2,6 @@ package com.rtxauto.rtx_auto_trader
 
 import android.content.ComponentName
 import android.content.Intent
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
 import io.flutter.embedding.android.FlutterActivity
@@ -25,37 +23,29 @@ class MainActivity : FlutterActivity() {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     result.success(null)
                 }
-                // ✅ ফিক্স: এই অ্যাপে বাটন চাপার মুহূর্তে এই অ্যাপই "active
-                // window" থাকে, MT5 না — তাই সাথে সাথে dump করলে সবসময়
-                // "active window পাওয়া যায়নি" এরর আসবে। এখন একটা
-                // delaySeconds প্যারামিটার নেওয়া হচ্ছে — ইউজার এই সময়ের
-                // মধ্যে MT5-এ সুইচ করবে, তারপর Handler.postDelayed দিয়ে
-                // দেরিতে dump করা হবে। এই Handler মেইন Activity বন্ধ/পজড
-                // হলেও (ইউজার অন্য অ্যাপে গেলে) প্রসেস জীবিত থাকা পর্যন্ত
-                // কাজ করতে থাকে।
-                "dumpNow" -> {
+                // ✅ বড় ফিক্স: আগে এই কল ৫ সেকেন্ড ধরে "result" কলব্যাক
+                // পেন্ডিং রাখত। কিন্তু ইউজার MT5-এ সুইচ করার সময় Android
+                // এই Activity-কে background-এ থাকা অবস্থায় recreate/kill
+                // করে দিতে পারে (মেমোরি ম্যানেজমেন্টের কারণে) — তখন সেই
+                // পুরনো পেন্ডিং result callback হারিয়ে যায়, কোনো error
+                // ছাড়াই। এখন এই কল সাথে সাথেই "scheduled=true" রিটার্ন
+                // করে, আর আসল dump কাজ AccessibilityService-এর নিজস্ব
+                // Handler দিয়ে independent ভাবে চলে — Activity বাঁচুক বা
+                // মরুক তাতে কিছু আসে যায় না, কারণ AccessibilityService
+                // MainActivity-এর lifecycle-এর সাথে বাঁধা না।
+                "scheduleDump" -> {
                     val delaySeconds = (call.argument<Int>("delaySeconds") ?: 5)
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        val service = NodeDumperService.getInstance()
-                        if (service == null) {
-                            result.error(
-                                "SERVICE_NOT_RUNNING",
-                                "Accessibility Service চালু নেই — আগে সেটিংস থেকে এনাবল করুন।",
-                                null
-                            )
-                        } else {
-                            val filePath = service.dumpToFile()
-                            if (filePath != null) {
-                                result.success(filePath)
-                            } else {
-                                result.error(
-                                    "DUMP_FAILED",
-                                    "কোনো active window পাওয়া যায়নি — MT5 অ্যাপ সামনে আছে কি না চেক করুন।",
-                                    null
-                                )
-                            }
-                        }
-                    }, delaySeconds * 1000L)
+                    val service = NodeDumperService.getInstance()
+                    if (service == null) {
+                        result.error(
+                            "SERVICE_NOT_RUNNING",
+                            "Accessibility Service চালু নেই — আগে সেটিংস থেকে এনাবল করুন।",
+                            null
+                        )
+                    } else {
+                        service.scheduleDelayedDump(delaySeconds)
+                        result.success(true)
+                    }
                 }
                 "listDumps" -> {
                     result.success(listDumpFiles())
