@@ -13,22 +13,81 @@ const String _systemInstruction =
     'DIRECTION must be exactly CALL or PUT.\n'
     'CONFIDENCE is an integer 0-100.\n'
     'REASON must be written in Bengali (বাংলা), up to about 20 words.\n'
-    'Never add greetings, disclaimers, or markdown.\n'
+    'Never add greetings, disclaimers, markdown, code fences, or extra lines.\n'
     'Never refuse to answer — always output a definite CALL or PUT.';
 
 String _voteDump(Map<String, String> breakdown) =>
     breakdown.entries.map((e) => '${e.key}:${e.value}').join(', ');
 
-/// Gemini API কল করে চূড়ান্ত মতামত আনে। কোনো কারণে ব্যর্থ হলে (key নেই,
-/// network সমস্যা, timeout ইত্যাদি) কখনো crash করে না — বরং একটা
-/// ok:false verdict রিটার্ন করে যাতে caller নিরাপদে fallback করতে পারে।
+/// ✅ বড় ফিক্স: আগে কড়াকড়িভাবে ঠিক "DIRECTION|CONFIDENCE|REASON" এই
+/// ফরম্যাট আশা করা হতো (`split('|')` দিয়ে, ৩টা অংশ না পেলেই ব্যর্থ)।
+/// কিন্তু Gemini মাঝেমধ্যে markdown backtick, অতিরিক্ত স্পেস, নতুন
+/// লাইন, বা সামান্য ভিন্ন বিন্যাসে উত্তর দেয় — তখনই parsing বারবার
+/// ব্যর্থ হয়ে পুরো AI অংশ অকেজো হয়ে যাচ্ছিল। এখন regex দিয়ে CALL/PUT
+/// শব্দ ও সংখ্যা টেক্সটের **যেকোনো জায়গা** থেকে খোঁজা হয়, এবং
+/// markdown fence/backtick প্রথমে সাফ করে নেওয়া হয় — এতে পার্সিং
+/// অনেক বেশি সহনশীল (lenient) হলো।
+class _ParsedGeminiResponse {
+  final String direction;
+  final int confidence;
+  final String reason;
+  const _ParsedGeminiResponse({required this.direction, required this.confidence, required this.reason});
+}
+
+_ParsedGeminiResponse? _parseLenient(String rawText) {
+  // markdown code fence, backtick, অতিরিক্ত হোয়াইটস্পেস পরিষ্কার করা
+  var text = rawText.trim();
+  text = text.replaceAll('```', '');
+  text = text.replaceAll('`', '');
+  text = text.trim();
+
+  if (text.isEmpty) return null;
+
+  // ধাপ ১: pipe-বিভক্ত ফরম্যাট আছে কি না চেষ্টা করা (দ্রুততম পথ)
+  final pipeParts = text.split('|').map((p) => p.trim()).where((p) => p.isNotEmpty).toList();
+  if (pipeParts.length >= 3) {
+    final dir = pipeParts[0].toUpperCase();
+    if (dir == 'CALL' || dir == 'PUT') {
+      final conf = int.tryParse(pipeParts[1].replaceAll(RegExp(r'[^0-9]'), ''));
+      if (conf != null) {
+        final reason = pipeParts.sublist(2).join(' ').trim();
+        return _ParsedGeminiResponse(direction: dir, confidence: conf.clamp(0, 100), reason: reason);
+      }
+    }
+  }
+
+  // ধাপ ২: pipe ফরম্যাট মিলল না — পুরো টেক্সট থেকে regex দিয়ে খোঁজা
+  final directionMatch = RegExp(r'\b(CALL|PUT)\b', caseSensitive: false).firstMatch(text);
+  if (directionMatch == null) return null; // CALL/PUT কোথাও নেই — সত্যিই পার্স করা অসম্ভব
+  final direction = directionMatch.group(0)!.toUpperCase();
+
+  final confidenceMatch = RegExp(r'\b([0-9]{1,3})\b').firstMatch(text);
+  final confidence = confidenceMatch != null
+      ? (int.tryParse(confidenceMatch.group(1)!) ?? 50).clamp(0, 100)
+      : 50;
+
+  // reason হিসেবে direction/confidence টোকেন বাদ দিয়ে বাকি টেক্সট নেওয়া হয়
+  var reason = text
+      .replaceAll(directionMatch.group(0)!, '')
+      .replaceAll('|', ' ')
+      .trim();
+  if (confidenceMatch != null) {
+    reason = reason.replaceFirst(confidenceMatch.group(1)!, '').trim();
+  }
+  reason = reason.replaceAll(RegExp(r'^[\s:,\-]+'), '').trim();
+  if (reason.isEmpty) reason = 'AI থেকে নির্দিষ্ট কারণ পাওয়া যায়নি, তবে দিক নির্ধারিত হয়েছে।';
+
+  return _ParsedGeminiResponse(direction: direction, confidence: confidence.toInt(), reason: reason);
+}
+
 Future<AiVerdict> fetchAiVerdict({
   required String apiKey,
   required String market,
   required EngineSignal engine,
 }) async {
+  final fallbackDirection = engine.strength >= 50 ? 'CALL' : 'PUT';
+
   if (apiKey.isEmpty) {
-    final fallbackDirection = engine.strength >= 50 ? 'CALL' : 'PUT';
     return AiVerdict(
       ok: false,
       direction: fallbackDirection,
@@ -37,8 +96,6 @@ Future<AiVerdict> fetchAiVerdict({
       errorType: 'no_key',
     );
   }
-
-  final fallbackDirection = engine.strength >= 50 ? 'CALL' : 'PUT';
 
   AiVerdict fallback(String reasonBn, String errorType) => AiVerdict(
         ok: false,
@@ -79,7 +136,7 @@ Respond with exactly one line: DIRECTION|CONFIDENCE|REASON
                 ]
               }
             ],
-            'generationConfig': {'temperature': 0.15, 'maxOutputTokens': 100, 'candidateCount': 1},
+            'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 120, 'candidateCount': 1},
           }),
         )
         .timeout(const Duration(seconds: 15));
@@ -102,6 +159,9 @@ Respond with exactly one line: DIRECTION|CONFIDENCE|REASON
     if (res.statusCode == 401 || res.statusCode == 403) {
       return fallback('Gemini API key ভুল বা অবৈধ।', 'auth');
     }
+    if (res.statusCode == 404) {
+      return fallback('Gemini মডেল খুঁজে পাওয়া যায়নি — মডেলের নাম চেক করুন।', 'not_found');
+    }
     if (res.statusCode == 429) {
       return fallback('Gemini লিমিট শেষ, একটু পর আবার চেষ্টা করুন।', 'rate_limit');
     }
@@ -109,29 +169,26 @@ Respond with exactly one line: DIRECTION|CONFIDENCE|REASON
   }
 
   final candidates = body['candidates'] as List?;
-  final text = (candidates != null && candidates.isNotEmpty)
-      ? (candidates[0]['content']?['parts']?[0]?['text']?.toString() ?? '')
-      : '';
+  if (candidates == null || candidates.isEmpty) {
+    // ✅ নতুন: candidate একদমই না থাকলে finishReason (যেমন SAFETY ব্লক)
+    // থাকলে সেটা বাংলায় দেখানো হয়, যাতে ডিবাগ করা সহজ হয়
+    return fallback('Gemini থেকে কোনো candidate পাওয়া যায়নি (সম্ভবত সেফটি ফিল্টারে আটকেছে)।', 'no_candidates');
+  }
+
+  final text = candidates[0]['content']?['parts']?[0]?['text']?.toString() ?? '';
   if (text.trim().isEmpty) {
     return fallback('Gemini থেকে কোনো উত্তর আসেনি।', 'empty');
   }
 
-  final parts = text.trim().split('|');
-  if (parts.length < 3) {
-    return fallback('AI রেসপন্স ফরম্যাট ভুল ছিল, ইঞ্জিন দিয়ে সিদ্ধান্ত নেওয়া হলো।', 'format');
+  final parsed = _parseLenient(text);
+  if (parsed == null) {
+    return fallback('AI রেসপন্স থেকে দিক (CALL/PUT) খুঁজে পাওয়া যায়নি, ইঞ্জিন দিয়ে সিদ্ধান্ত নেওয়া হলো।', 'format');
   }
-
-  final direction = parts[0].trim().toUpperCase();
-  if (direction != 'CALL' && direction != 'PUT') {
-    return fallback('AI দিক বুঝতে পারা যায়নি, ইঞ্জিন দিয়ে সিদ্ধান্ত নেওয়া হলো।', 'bad_direction');
-  }
-  final confidence = int.tryParse(parts[1].trim().replaceAll(RegExp(r'[^0-9]'), '')) ?? 50;
-  final reason = parts.sublist(2).join('|').trim();
 
   return AiVerdict(
     ok: true,
-    direction: direction,
-    confidence: confidence.clamp(0, 100),
-    reason: reason.isNotEmpty ? reason : 'কোনো কারণ দেওয়া হয়নি।',
+    direction: parsed.direction,
+    confidence: parsed.confidence,
+    reason: parsed.reason,
   );
 }
