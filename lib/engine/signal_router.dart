@@ -7,6 +7,7 @@ import 'strategies/sweep_reclaim.dart';
 import 'strategies/crt_tbs.dart';
 import 'strategies/qm_smc.dart';
 import 'strategies/price_action_fib.dart';
+import 'strategies/wyckoff_ict.dart';
 
 typedef StrategyRunner = StrategyResult Function({
   required Map<String, List<Candle>> timeframes,
@@ -14,17 +15,17 @@ typedef StrategyRunner = StrategyResult Function({
   required String htfBias1h,
 });
 
-/// প্রতিটা মোড আইডি একটা স্ট্র্যাটেজি ফাংশনের সাথে ম্যাপ করা।
-/// Wyckoff/ICT (mode: wyckoff_ict) এখনো যোগ করা হয়নি — সোর্স ফাইল
-/// পাওয়া গেলে এখানে একটা লাইন যোগ করলেই চলবে।
+/// এখন ৫টা মোডই যুক্ত। প্রতিটা মোড আইডি mode_meta.dart-এর kSignalModes
+/// এর id-এর সাথে হুবহু মিলতে হবে, নাহলে UI-তে সেই মোড কখনো স্ক্যানই
+/// হবে না।
 final Map<String, StrategyRunner> kModeRunners = {
   'sweep': runSweepReclaim,
   'crt_tbs': runCrtTbs,
+  'wyckoff_ict': runWyckoffIct,
   'qm_smc': runQmSmc,
   'price_action_fib': runPriceActionFib,
 };
 
-/// রাউটারের চূড়ান্ত আউটপুট — StrategyResult + pip/risk হিসাব একসাথে।
 class RouterSignal {
   final bool noSignal;
   final String? debugReasonBn;
@@ -58,9 +59,32 @@ class RouterSignal {
         debugReasonBn = null;
 }
 
-/// পুরো সিগন্যাল পাইপলাইন: HTF bias বের করা → স্ট্র্যাটেজি চালানো →
-/// pip/RR হিসাব → SignalRiskGate দিয়ে কোয়ালিটি চেক। এই ফাংশনের বাইরে
-/// কোথাও সরাসরি স্ট্র্যাটেজি ফাংশন কল করা উচিত না।
+/// ✅ নতুন: SL/TP দূরত্ব বাস্তবসম্মত সীমার মধ্যে আছে কি না যাচাই করে —
+/// কোনো হিসাবের বাগে যদি অস্বাভাবিক বড় বা ছোট দূরত্ব চলে আসে, সিগন্যাল
+/// UI-তে পৌঁছানোর আগেই আটকে দেওয়া হয়। এই সীমাগুলো সাধারণ ইন্ট্রাডে
+/// ফরেক্স ট্রেডিং-এর বাস্তবসম্মত রেঞ্জ অনুযায়ী সেট করা (খুব সংকীর্ণ
+/// SL বা কয়েক শ' pip-এর অস্বাভাবিক বড় SL — দুটোই সন্দেহজনক)।
+class _SanityLimits {
+  static const double minSlPips = 1.0;
+  static const double maxSlPips = 300.0;
+}
+
+String? _sanityCheckReason(double slPips, double tp1Pips, double tp2Pips, double tp3Pips) {
+  if (slPips < _SanityLimits.minSlPips) {
+    return 'SL দূরত্ব অস্বাভাবিক কম (${slPips.toStringAsFixed(1)} pips) — গণনায় সমস্যা মনে হচ্ছে, সিগন্যাল বাতিল।';
+  }
+  if (slPips > _SanityLimits.maxSlPips) {
+    return 'SL দূরত্ব অস্বাভাবিক বেশি (${slPips.toStringAsFixed(1)} pips) — গণনায় সমস্যা মনে হচ্ছে, সিগন্যাল বাতিল।';
+  }
+  if (tp1Pips <= 0 || tp2Pips <= 0 || tp3Pips <= 0) {
+    return 'TP দূরত্ব শূন্য বা ঋণাত্মক এসেছে — সিগন্যাল বাতিল।';
+  }
+  if (!(tp1Pips < tp2Pips && tp2Pips < tp3Pips)) {
+    return 'TP1/TP2/TP3 ক্রম ভুল এসেছে — সিগন্যাল বাতিল।';
+  }
+  return null;
+}
+
 RouterSignal generateRouterSignal({
   required String modeId,
   required Map<String, List<Candle>> timeframes,
@@ -89,7 +113,7 @@ RouterSignal generateRouterSignal({
   String htfBias1h = 'Neutral';
   if (has4h) htfBias4h = getHtfBias(h4);
   if (has1h) htfBias1h = getHtfBias(h1);
-  if (!has4h && has1h) htfBias4h = htfBias1h; // 4h না থাকলে 1h fallback হিসেবে ব্যবহার
+  if (!has4h && has1h) htfBias4h = htfBias1h;
 
   final raw = runner(timeframes: timeframes, htfBias4h: htfBias4h, htfBias1h: htfBias1h);
   if (raw.noSignal || !raw.isStructurallyValid) {
@@ -103,6 +127,13 @@ RouterSignal generateRouterSignal({
 
   if (slPips == 0) {
     return const RouterSignal.blocked('SL দূরত্ব 0 pips — সিগন্যাল বাতিল করা হলো।');
+  }
+
+  // ✅ নতুন sanity layer — কাঠামোগতভাবে "valid" হলেও বাস্তবসম্মত না
+  // হলে এখানেই আটকে দেওয়া হয়
+  final sanityIssue = _sanityCheckReason(slPips, tp1Pips, tp2Pips, tp3Pips);
+  if (sanityIssue != null) {
+    return RouterSignal.blocked(sanityIssue);
   }
 
   final rr = tp1Pips / slPips;
