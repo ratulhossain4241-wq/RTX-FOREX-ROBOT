@@ -1,9 +1,6 @@
 import 'package:flutter/services.dart';
 
 /// MainActivity.kt-এর MethodChannel-এর সাথে Dart সাইডের সংযোগ।
-/// এই ক্লাসটাই একমাত্র জায়গা যেখান থেকে নেটিভ Android কোড কল করা
-/// হয় — ভবিষ্যতে Trade Executor বানানোর সময়ও এই একই প্যাটার্নে নতুন
-/// মেথড যোগ হবে।
 class DumperBridge {
   static const MethodChannel _channel = MethodChannel('rtx_auto_trader/native');
 
@@ -19,18 +16,15 @@ class DumperBridge {
   static Future<void> openAccessibilitySettings() async {
     try {
       await _channel.invokeMethod('openAccessibilitySettings');
-    } catch (_) {
-      // সেটিংস খুলতে ব্যর্থ হলেও অ্যাপ ক্র্যাশ করবে না — UI থেকে
-      // ইউজারকে ম্যানুয়ালি সেটিংসে যেতে বলা হবে।
-    }
+    } catch (_) {}
   }
 
-  /// বর্তমানে স্ক্রিনে যা আছে (আশা করা হচ্ছে MT5) তার node tree ডাম্প
-  /// করে ফাইলে সেভ করে, ফাইলের path রিটার্ন করে। ব্যর্থ হলে কারণসহ
-  /// exception throw করে যাতে UI-তে নির্দিষ্ট বাংলা বার্তা দেখানো যায়।
-  static Future<String> dumpNow() async {
+  /// ✅ ফিক্স: delaySeconds যোগ হলো — বাটন চাপার সময় এই অ্যাপই active
+  /// window থাকে, তাই সাথে সাথে dump করলে ব্যর্থ হবে। এই delay চলাকালীন
+  /// ইউজার MT5-এ সুইচ করবে, তারপর নেটিভ কোড দেরিতে dump করবে।
+  static Future<String> dumpNow({int delaySeconds = 5}) async {
     try {
-      final path = await _channel.invokeMethod<String>('dumpNow');
+      final path = await _channel.invokeMethod<String>('dumpNow', {'delaySeconds': delaySeconds});
       if (path == null) throw DumperException('Dump ব্যর্থ হয়েছে — অজানা কারণ।');
       return path;
     } on PlatformException catch (e) {
@@ -38,7 +32,7 @@ class DumperBridge {
         throw DumperException('Accessibility Service চালু নেই — আগে সেটিংস থেকে এনাবল করুন।');
       }
       if (e.code == 'DUMP_FAILED') {
-        throw DumperException('কোনো active window পাওয়া যায়নি — MT5 অ্যাপ সামনে আছে কি না দেখুন।');
+        throw DumperException('কোনো active window পাওয়া যায়নি — সময়মতো MT5-এ সুইচ করেছেন তো?');
       }
       throw DumperException(e.message ?? 'অজানা সমস্যা হয়েছে।');
     }
