@@ -19,20 +19,16 @@ class DumperBridge {
     } catch (_) {}
   }
 
-  /// ✅ ফিক্স: delaySeconds যোগ হলো — বাটন চাপার সময় এই অ্যাপই active
-  /// window থাকে, তাই সাথে সাথে dump করলে ব্যর্থ হবে। এই delay চলাকালীন
-  /// ইউজার MT5-এ সুইচ করবে, তারপর নেটিভ কোড দেরিতে dump করবে।
-  static Future<String> dumpNow({int delaySeconds = 5}) async {
+  /// ✅ ফিক্স: এই কল এখন সাথে সাথেই ফিরে আসে (শুধু "শিডিউল করা হলো"
+  /// নিশ্চিত করে) — আসল dump কাজ নেটিভ সাইডে AccessibilityService
+  /// independent ভাবে চালায়। তাই MainActivity ব্যাকগ্রাউন্ডে গিয়ে
+  /// recreate হলেও (MT5-এ সুইচ করার সময় প্রায়ই হয়) কোনো ফলাফল হারায় না।
+  static Future<void> scheduleDump({int delaySeconds = 5}) async {
     try {
-      final path = await _channel.invokeMethod<String>('dumpNow', {'delaySeconds': delaySeconds});
-      if (path == null) throw DumperException('Dump ব্যর্থ হয়েছে — অজানা কারণ।');
-      return path;
+      await _channel.invokeMethod('scheduleDump', {'delaySeconds': delaySeconds});
     } on PlatformException catch (e) {
       if (e.code == 'SERVICE_NOT_RUNNING') {
         throw DumperException('Accessibility Service চালু নেই — আগে সেটিংস থেকে এনাবল করুন।');
-      }
-      if (e.code == 'DUMP_FAILED') {
-        throw DumperException('কোনো active window পাওয়া যায়নি — সময়মতো MT5-এ সুইচ করেছেন তো?');
       }
       throw DumperException(e.message ?? 'অজানা সমস্যা হয়েছে।');
     }
