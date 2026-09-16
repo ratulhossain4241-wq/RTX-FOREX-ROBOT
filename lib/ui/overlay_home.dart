@@ -397,6 +397,9 @@ class _OverlayHomeState extends State<OverlayHome> {
           Text(strat.direction ?? '-', style: TextStyle(color: directionColor, fontSize: 20, fontWeight: FontWeight.w900)),
           const SizedBox(height: 4),
           Text('Strength: ${strat.strength}', style: const TextStyle(color: T.dim, fontSize: 11)),
+          const Text('📊 এন্ট্রি টাইমফ্রেম: 15m (1h/4h = ট্রেন্ড কনফার্মেশন)',
+              style: TextStyle(color: T.cyan, fontSize: 10, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
           if (enriched != null) ...[
             const SizedBox(height: 6),
             Container(
