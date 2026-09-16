@@ -350,7 +350,7 @@ class _OverlayHomeState extends State<OverlayHome> {
     if (_scanning) {
       return const Padding(
         padding: EdgeInsets.all(14),
-        child: Text('SCANNING (৪টি মোড যাচাই হচ্ছে)...',
+        child: Text('SCANNING (${kSignalModes.length}টি মোড যাচাই হচ্ছে)...',
             textAlign: TextAlign.center, style: TextStyle(color: T.green, fontWeight: FontWeight.bold, fontSize: 13)),
       );
     }
