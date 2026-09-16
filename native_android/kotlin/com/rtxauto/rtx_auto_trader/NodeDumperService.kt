@@ -1,6 +1,8 @@
 package com.rtxauto.rtx_auto_trader
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.io.File
@@ -9,15 +11,19 @@ import java.util.Date
 import java.util.Locale
 
 /// এই Accessibility Service শুধু স্ক্রিন "পড়ে" — কোনো ক্লিক/টাইপ করে না।
-/// উদ্দেশ্য শুধু MT5 অ্যাপের UI এলিমেন্টগুলোর resourceId/text/bounds
-/// বের করে একটা ফাইলে সেভ করা, যাতে পরে Trade Executor বানানোর সময়
-/// সেই তথ্য ব্যবহার করা যায়। এটা সম্পূর্ণ read-only, তাই নিরাপদ।
+/// ✅ scheduleDelayedDump() এখন এই Service-এর নিজস্ব Handler ব্যবহার করে,
+/// যেটা MainActivity-এর lifecycle-এর সাথে বাঁধা না। তাই ইউজার MT5-এ
+/// সুইচ করার সময় MainActivity recreate/pause হলেও এই delayed dump
+/// কাজটা নির্বিঘ্নে চলতে থাকে (যতক্ষণ পুরো অ্যাপ প্রসেস বেঁচে থাকে
+/// এবং Accessibility Service সিস্টেম থেকে বন্ধ না করা হয়)।
 class NodeDumperService : AccessibilityService() {
 
     companion object {
         private var instance: NodeDumperService? = null
         fun getInstance(): NodeDumperService? = instance
     }
+
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -26,20 +32,49 @@ class NodeDumperService : AccessibilityService() {
 
     override fun onDestroy() {
         instance = null
+        handler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
-    // এই সার্ভিস কোনো event-এ প্রতিক্রিয়া দেখায় না — শুধু on-demand dump করে,
-    // তাই এই ফাংশন ইচ্ছাকৃতভাবে খালি রাখা হয়েছে।
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     override fun onInterrupt() {}
 
-    /// বর্তমানে স্ক্রিনে যা আছে (ধরে নিচ্ছি MT5 অ্যাপ সামনে আছে) তার পুরো
-    /// node tree পড়ে একটা টেক্সট ফাইলে লেখে। সফল হলে ফাইলের path রিটার্ন
-    /// করে, active window না পেলে null রিটার্ন করে।
+    /// নির্দিষ্ট সময় পর dumpToFile() কল করে — এই কল MainActivity বা
+    /// Flutter engine-এর ওপর নির্ভর করে না, তাই সেগুলো ব্যাকগ্রাউন্ডে
+    /// pause/recreate হলেও এই শিডিউল করা কাজ প্রভাবিত হয় না।
+    fun scheduleDelayedDump(delaySeconds: Int) {
+        handler.postDelayed({
+            dumpToFile()
+        }, delaySeconds * 1000L)
+    }
+
+    /// বর্তমানে স্ক্রিনে যা আছে তার পুরো node tree পড়ে একটা টেক্সট
+    /// ফাইলে লেখে। সফল হলে ফাইলের path রিটার্ন করে, active window না
+    /// পেলে null রিটার্ন করে (কিন্তু ব্যর্থতাও ফাইলে লগ করা হয়, যাতে
+    /// ডিবাগ করা সহজ হয়)।
     fun dumpToFile(): String? {
-        val root = rootInActiveWindow ?: return null
+        val dir = getExternalFilesDir(null) ?: filesDir
+        val dumpFolder = File(dir, "mt5_dumps")
+        if (!dumpFolder.exists()) dumpFolder.mkdirs()
+
+        val root = rootInActiveWindow
+        val fileName = "dump_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.txt"
+        val file = File(dumpFolder, fileName)
+
+        if (root == null) {
+            // ✅ ব্যর্থ হলেও একটা ফাইল লেখা হচ্ছে, যাতে ইউজার/আমরা বুঝতে
+            // পারি ঠিক কী কারণে dump ফাঁকা এলো (আগে এই তথ্য হারিয়ে যেত)।
+            file.writeText(
+                "❌ ব্যর্থ: rootInActiveWindow পাওয়া যায়নি।\n" +
+                "সম্ভাব্য কারণ:\n" +
+                "1. MT5 অ্যাপ তখন সামনে ছিল না (৫ সেকেন্ডের মধ্যে সুইচ করা হয়নি)\n" +
+                "2. MT5-এর প্যাকেজ নাম accessibility_dumper_config.xml-এর packageNames-এ নেই\n" +
+                "3. Accessibility Service সিস্টেম দ্বারা বন্ধ হয়ে গেছে\n" +
+                "Dump Time: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n"
+            )
+            return file.absolutePath
+        }
 
         val sb = StringBuilder()
         sb.append("Package: ${root.packageName}\n")
@@ -47,22 +82,11 @@ class NodeDumperService : AccessibilityService() {
         sb.append("=".repeat(60)).append("\n\n")
 
         dumpNode(root, 0, sb)
-
-        val dir = getExternalFilesDir(null) ?: filesDir
-        val dumpFolder = File(dir, "mt5_dumps")
-        if (!dumpFolder.exists()) dumpFolder.mkdirs()
-
-        val fileName = "dump_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())}.txt"
-        val file = File(dumpFolder, fileName)
         file.writeText(sb.toString())
 
         return file.absolutePath
     }
 
-    /// একটা নোড আর তার সব children রিকার্সিভলি প্রিন্ট করে — প্রতিটা
-    /// নোডে class name, text, content-description, resource-id,
-    /// clickable কি না, আর স্ক্রিনের কোন অবস্থানে (bounds) আছে তা থাকে।
-    /// এই তথ্যগুলোই পরে Trade Executor-এ বাটন খুঁজে বের করতে ব্যবহার হবে।
     private fun dumpNode(node: AccessibilityNodeInfo, depth: Int, sb: StringBuilder) {
         val indent = "  ".repeat(depth)
         val bounds = android.graphics.Rect()
