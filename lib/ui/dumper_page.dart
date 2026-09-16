@@ -1,14 +1,12 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import '../core/constants.dart';
 import '../executor/dumper_bridge.dart';
 import 'dump_viewer_page.dart';
 
-/// MT5 UI স্ক্যান করার মূল স্ক্রিন। ব্যবহারের ধাপ:
-/// ১. Accessibility Service এনাবল আছে কি না চেক/এনাবল
-/// ২. MT5 অ্যাপ ওপেন করে যে স্ক্রিন স্ক্যান করতে চাও সেখানে যাওয়া
-/// ৩. এই অ্যাপে ফিরে এসে "SCAN NOW" চাপা — এটা তখনকার MT5 স্ক্রিনের
-///    node tree ধরে ফেলবে
+const int _scanDelaySeconds = 5;
+
 class DumperPage extends StatefulWidget {
   const DumperPage({super.key});
 
@@ -19,6 +17,8 @@ class DumperPage extends StatefulWidget {
 class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
   bool _serviceEnabled = false;
   bool _scanning = false;
+  int _countdown = 0;
+  Timer? _countdownTimer;
   String? _message;
   List<String> _dumps = [];
 
@@ -32,12 +32,10 @@ class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _countdownTimer?.cancel();
     super.dispose();
   }
 
-  /// অ্যাপ থেকে বের হয়ে সেটিংস/MT5-এ গিয়ে আবার ফিরে এলে স্বয়ংক্রিয়ভাবে
-  /// service-এর স্ট্যাটাস রিফ্রেশ হয় — ইউজারকে বারবার ম্যানুয়ালি রিফ্রেশ
-  /// করতে হয় না।
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
@@ -55,13 +53,29 @@ class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
     });
   }
 
+  /// ✅ ফিক্স: এখন স্ক্যান দুই ধাপে হয় — প্রথমে একটা কাউন্টডাউন দেখানো
+  /// হয় (এই সময়ে ইউজার MT5-এ সুইচ করবে), তারপর নেটিভ কোড দেরিতে dump
+  /// করে। কাউন্টডাউন শেষ হওয়ার আগেই ইউজার এই স্ক্রিন ছেড়ে চলে যাবে —
+  /// এটাই উদ্দেশ্য, তাই UI countdown শুধু প্রথম কয়েক মুহূর্ত দেখা যাবে।
   Future<void> _scan() async {
     setState(() {
       _scanning = true;
       _message = null;
+      _countdown = _scanDelaySeconds;
     });
+
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() => _countdown = (_countdown - 1).clamp(0, _scanDelaySeconds));
+      if (_countdown <= 0) timer.cancel();
+    });
+
     try {
-      final path = await DumperBridge.dumpNow();
+      final path = await DumperBridge.dumpNow(delaySeconds: _scanDelaySeconds);
       if (!mounted) return;
       setState(() => _message = '✅ স্ক্যান সফল! ফাইল সেভ হয়েছে: ${path.split('/').last}');
       await _refresh();
@@ -69,6 +83,7 @@ class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
       if (!mounted) return;
       setState(() => _message = '⚠️ $e');
     } finally {
+      _countdownTimer?.cancel();
       if (mounted) setState(() => _scanning = false);
     }
   }
@@ -103,17 +118,19 @@ class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
               const SizedBox(height: 16),
               _instructionsCard(),
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: (_serviceEnabled && !_scanning) ? _scan : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: T.green,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+              if (_scanning) _countdownCard(),
+              if (!_scanning)
+                ElevatedButton(
+                  onPressed: _serviceEnabled ? _scan : null,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: T.green,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text(
+                    '📸 SCAN NOW (৫ সেকেন্ড পর স্ক্যান হবে)',
+                    style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+                  ),
                 ),
-                child: Text(
-                  _scanning ? 'স্ক্যান হচ্ছে...' : '📸 SCAN NOW (বর্তমান MT5 স্ক্রিন)',
-                  style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-                ),
-              ),
               if (_message != null) ...[
                 const SizedBox(height: 10),
                 Text(_message!, style: const TextStyle(color: T.gold, fontSize: 12)),
@@ -164,6 +181,31 @@ class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _countdownCard() {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: T.card,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: T.gold),
+      ),
+      child: Column(
+        children: [
+          Text(
+            _countdown > 0 ? '$_countdown' : '⏳ স্ক্যান হচ্ছে...',
+            style: const TextStyle(color: T.gold, fontSize: 32, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'এখনই MT5 অ্যাপে সুইচ করো এবং যে স্ক্রিন স্ক্যান করতে চাও সেখানে যাও!',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: T.dim, fontSize: 12, fontWeight: FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _statusCard() {
     return Container(
       padding: const EdgeInsets.all(14),
@@ -205,13 +247,13 @@ class _DumperPageState extends State<DumperPage> with WidgetsBindingObserver {
         children: [
           Text('ব্যবহারের ধাপ:', style: TextStyle(color: T.gold, fontSize: 12, fontWeight: FontWeight.bold)),
           SizedBox(height: 6),
-          Text('১. উপরে Enable চেপে Accessibility Service চালু করো (RTX Auto Trader খুঁজে অন করো)',
+          Text('১. Accessibility Service এনাবল আছে কি না নিশ্চিত হও',
               style: TextStyle(color: T.dim, fontSize: 11)),
-          Text('২. MT5 অ্যাপ ওপেন করে যে স্ক্রিন স্ক্যান করতে চাও সেখানে যাও',
+          Text('২. "SCAN NOW" চাপো — সাথে সাথে ৫ সেকেন্ডের কাউন্টডাউন শুরু হবে',
               style: TextStyle(color: T.dim, fontSize: 11)),
-          Text('৩. এই অ্যাপে ফিরে এসে "SCAN NOW" চাপো',
+          Text('৩. কাউন্টডাউন চলাকালীনই দ্রুত MT5 অ্যাপে সুইচ করো এবং কাঙ্ক্ষিত স্ক্রিনে যাও',
               style: TextStyle(color: T.dim, fontSize: 11)),
-          Text('৪. স্ক্যান ফলাফল লিস্টে দেখাবে — চাপলে দেখা যাবে, শেয়ার আইকনে চাপলে পাঠানো যাবে',
+          Text('৪. ৫ সেকেন্ড পর স্বয়ংক্রিয়ভাবে স্ক্যান হবে — তারপর এই অ্যাপে ফিরে এসে ফলাফল দেখো',
               style: TextStyle(color: T.dim, fontSize: 11)),
         ],
       ),
