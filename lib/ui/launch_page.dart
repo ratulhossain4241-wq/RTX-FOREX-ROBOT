@@ -4,7 +4,6 @@ import '../core/constants.dart';
 import '../core/store.dart';
 import '../core/models.dart';
 import 'risk_settings_page.dart';
-import 'dumper_page.dart';
 
 class LaunchPage extends StatefulWidget {
   const LaunchPage({super.key});
@@ -228,12 +227,6 @@ class _LaunchPageState extends State<LaunchPage> {
               const SizedBox(height: 10),
               _outlineButton('⚙️ RISK SETTINGS (Risk %, Daily Loss, ইত্যাদি)', () {
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const RiskSettingsPage()));
-              }),
-
-              const SizedBox(height: 24),
-              const _SectionTitle('TOOLS'),
-              _outlineButton('📸 MT5 SCREEN SCANNER', () {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => const DumperPage()));
               }),
 
               const SizedBox(height: 28),
