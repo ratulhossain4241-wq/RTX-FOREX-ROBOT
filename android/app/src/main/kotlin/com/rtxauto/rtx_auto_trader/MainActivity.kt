@@ -54,9 +54,11 @@ class MainActivity : FlutterActivity() {
                             return@setMethodCallHandler
                         }
 
+                        val lot = (data["lot"] as? Number)?.toDouble()
+
                         val success = when (action.uppercase()) {
-                            "BUY" -> service.performBuy()
-                            "SELL" -> service.performSell()
+                            "BUY" -> service.performBuy(lot)
+                            "SELL" -> service.performSell(lot)
                             "CLOSE_ALL" -> service.performCloseAll()
                             else -> false
                         }
