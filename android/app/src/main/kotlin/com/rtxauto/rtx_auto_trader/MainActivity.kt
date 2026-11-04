@@ -20,8 +20,7 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
 
                     "isAccessibilityEnabled" -> {
-                        val enabled = isAccessibilityServiceEnabled()
-                        result.success(enabled)
+                        result.success(isAccessibilityServiceEnabled())
                     }
 
                     "openAccessibilitySettings" -> {
@@ -55,10 +54,12 @@ class MainActivity : FlutterActivity() {
                         }
 
                         val lot = (data["lot"] as? Number)?.toDouble()
+                        val sl = (data["sl"] as? Number)?.toDouble()
+                        val tp = (data["tp"] as? Number)?.toDouble()
 
                         val success = when (action.uppercase()) {
-                            "BUY" -> service.performBuy(lot)
-                            "SELL" -> service.performSell(lot)
+                            "BUY" -> service.performBuy(lot, sl, tp)
+                            "SELL" -> service.performSell(lot, sl, tp)
                             "CLOSE_ALL" -> service.performCloseAll()
                             else -> false
                         }
@@ -70,8 +71,7 @@ class MainActivity : FlutterActivity() {
                     }
 
                     "getCurrentMt5State" -> {
-                        val state = RtxAccessibilityService.instance?.getCurrentState()
-                        result.success(state)
+                        result.success(RtxAccessibilityService.instance?.getCurrentState())
                     }
 
                     else -> result.notImplemented()
