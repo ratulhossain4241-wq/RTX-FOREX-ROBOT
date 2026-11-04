@@ -4,21 +4,13 @@ import 'models.dart';
 import 'risk_engine.dart';
 import 'store.dart';
 import 'trade_logger.dart';
+import 'execution_logger.dart';
 
-/// MT5 অ্যাপে আসলে ট্রেড এক্সিকিউট করার দায়িত্ব এই ক্লাসের।
-/// Accessibility Service এর মাধ্যমে Buy/Sell/Close ক্লিক করায়।
-///
-/// নিরাপত্তা:
-/// - RiskEngine দিয়ে আগে চেক করে
-/// - Cooldown থাকে যাতে বারবার ক্লিক না হয়
-/// - শুধু MT5 প্যাকেজে কাজ করে
 class Mt5Executor {
   static DateTime? _lastExecutionTime;
 
-  /// একটি সিগন্যাল অনুযায়ী ট্রেড খোলার চেষ্টা করে।
-  /// সফল হলে true রিটার্ন করে এবং TradeLogger এ রেকর্ড করে।
   static Future<ExecutionResult> executeSignal({
-    required String direction, // 'LONG' বা 'SHORT'
+    required String direction,
     required double entryPrice,
     required double slPrice,
     required double tp1Price,
@@ -26,7 +18,6 @@ class Mt5Executor {
     required String market,
     required String signalId,
   }) async {
-    // ১. Accessibility চালু আছে কিনা
     final isAccEnabled = await AccessibilityService.isEnabled();
     if (!isAccEnabled) {
       return ExecutionResult(
@@ -35,7 +26,6 @@ class Mt5Executor {
       );
     }
 
-    // ২. MT5 ফোরগ্রাউন্ডে আছে কিনা
     final isMt5Open = await AccessibilityService.isMt5InForeground();
     if (!isMt5Open) {
       return ExecutionResult(
@@ -44,7 +34,6 @@ class Mt5Executor {
       );
     }
 
-    // ৩. Cooldown চেক
     final cooldown = await Store.executionCooldownSeconds();
     if (_lastExecutionTime != null) {
       final diff = DateTime.now().difference(_lastExecutionTime!).inSeconds;
@@ -56,7 +45,6 @@ class Mt5Executor {
       }
     }
 
-    // ৪. একই সিগন্যাল আগে এক্সিকিউট হয়েছে কিনা
     final lastId = await Store.lastExecutedSignalId();
     if (lastId == signalId) {
       return ExecutionResult(
@@ -65,10 +53,8 @@ class Mt5Executor {
       );
     }
 
-    // ৫. অ্যাকশন টাইপ নির্ধারণ
     final action = direction.toUpperCase() == 'LONG' ? 'BUY' : 'SELL';
 
-    // ৬. নেটিভ সাইডে কমান্ড পাঠানো
     final result = await AccessibilityService.performAction(
       actionType: action,
       extraData: {
@@ -86,7 +72,6 @@ class Mt5Executor {
       _lastExecutionTime = DateTime.now();
       await Store.setLastExecutedSignalId(signalId);
 
-      // ট্রেড লগ করা
       final trade = TradeRecord(
         market: market,
         direction: direction == 'LONG' ? 'CALL' : 'PUT',
@@ -98,16 +83,25 @@ class Mt5Executor {
       await TradeLogger.insertOpenTrade(trade);
     }
 
+    await ExecutionLogger.log(
+      signalId: signalId,
+      market: market,
+      direction: direction,
+      action: action,
+      success: success,
+      message: result['message']?.toString() ?? '',
+      lotSize: lotSize,
+    );
+
     return ExecutionResult(
       success: success,
       messageBn: success
-          ? 'ট্রেড সফলভাবে পাঠানো হয়েছে ($action)'
+          ? 'ট্রেড সফলভাবে পাঠানো হয়েছে ($action) — Lot: $lotSize'
           : (result['message']?.toString() ?? 'এক্সিকিউশন ব্যর্থ হয়েছে'),
       rawResult: result,
     );
   }
 
-  /// সব ওপেন পজিশন ক্লোজ করার চেষ্টা করে।
   static Future<ExecutionResult> closeAllPositions() async {
     final isAccEnabled = await AccessibilityService.isEnabled();
     if (!isAccEnabled) {
@@ -131,7 +125,6 @@ class Mt5Executor {
   }
 }
 
-/// এক্সিকিউশনের ফলাফল
 class ExecutionResult {
   final bool success;
   final String messageBn;
