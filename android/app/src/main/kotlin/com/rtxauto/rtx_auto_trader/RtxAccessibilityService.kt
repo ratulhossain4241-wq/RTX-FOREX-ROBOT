@@ -1,16 +1,10 @@
 package com.rtxauto.rtx_auto_trader
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.AccessibilityServiceInfo
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.util.Log
 
-/**
- * RTX Auto Trader Accessibility Service
- * শুধু MetaTrader 5 প্যাকেজ স্ক্যান করে এবং Buy/Sell/Close অ্যাকশন সাপোর্ট করে।
- * এটি প্রাথমিক ভার্সন — পরবর্তী ব্যাচে আরও শক্তিশালী Node Finder যোগ করা হবে।
- */
 class RtxAccessibilityService : AccessibilityService() {
 
     companion object {
@@ -21,16 +15,15 @@ class RtxAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "Accessibility Service Connected")
+        Log.i(TAG, "RTX Accessibility Service Connected")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // প্রাথমিক ভার্সনে শুধু ইভেন্ট রিসিভ করছি
-        // পরবর্তী আপডেটে এখানে রিয়েল-টাইম স্ক্যান লজিক যোগ হবে
+        // প্রয়োজন হলে পরে রিয়েল-টাইম মনিটরিং যোগ করা যাবে
     }
 
     override fun onInterrupt() {
-        Log.w(TAG, "Accessibility Service Interrupted")
+        Log.w(TAG, "Service Interrupted")
     }
 
     override fun onDestroy() {
@@ -38,27 +31,32 @@ class RtxAccessibilityService : AccessibilityService() {
         instance = null
     }
 
-    /**
-     * রুট নোড থেকে টেক্সট খুঁজে ক্লিক করার প্রাথমিক হেল্পার
-     */
-    fun findAndClickByText(text: String): Boolean {
+    fun isMt5Active(): Boolean {
         val root = rootInActiveWindow ?: return false
-        val nodes = root.findAccessibilityNodeInfosByText(text)
-        for (node in nodes) {
-            if (node.isClickable) {
-                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return true
-            }
-            // প্যারেন্ট ক্লিকেবল হতে পারে
-            var parent = node.parent
-            while (parent != null) {
-                if (parent.isClickable) {
-                    parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    return true
-                }
-                parent = parent.parent
-            }
-        }
-        return false
+        val pkg = root.packageName?.toString() ?: return false
+        return pkg == "net.metaquotes.metatrader5"
+    }
+
+    fun performBuy(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        return Mt5NodeFinder.performBuy(root)
+    }
+
+    fun performSell(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        return Mt5NodeFinder.performSell(root)
+    }
+
+    fun performCloseAll(): Boolean {
+        val root = rootInActiveWindow ?: return false
+        return Mt5NodeFinder.performClose(root)
+    }
+
+    fun getCurrentState(): Map<String, Any?> {
+        val root = rootInActiveWindow
+        return mapOf(
+            "isMt5" to isMt5Active(),
+            "hasRoot" to (root != null)
+        )
     }
 }
