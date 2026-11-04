@@ -1,10 +1,10 @@
 import 'accessibility_service.dart';
 import 'constants.dart';
 import 'models.dart';
-import 'risk_engine.dart';
 import 'store.dart';
 import 'trade_logger.dart';
 import 'execution_logger.dart';
+import 'trade_safety.dart';
 
 class Mt5Executor {
   static DateTime? _lastExecutionTime;
@@ -18,6 +18,18 @@ class Mt5Executor {
     required String market,
     required String signalId,
   }) async {
+    // অতিরিক্ত সেফটি চেক
+    final safety = TradeSafety.checkBeforeExecution(
+      direction: direction,
+      entry: entryPrice,
+      sl: slPrice,
+      tp: tp1Price,
+      lot: lotSize,
+    );
+    if (!safety.ok) {
+      return ExecutionResult(success: false, messageBn: safety.message);
+    }
+
     final isAccEnabled = await AccessibilityService.isEnabled();
     if (!isAccEnabled) {
       return ExecutionResult(
