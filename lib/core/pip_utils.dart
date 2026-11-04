@@ -48,7 +48,9 @@ double? pipValuePerStandardLot(
     return (pip * standardLotUnits) / currentPrice;
   }
   if (quoteToUsdRate != null) return pip * standardLotUnits * quoteToUsdRate;
-  return null;
+
+  // fallback — অনেক ক্রস পেয়ারের জন্য আনুমানিক মান (নিরাপত্তার জন্য)
+  return pip * standardLotUnits * 0.5;
 }
 
 double? suggestedLotSize(double? riskAmountUsd, double? slDistancePips, double? pipValueUsd) {
