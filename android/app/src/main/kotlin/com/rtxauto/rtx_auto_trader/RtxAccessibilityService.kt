@@ -19,7 +19,7 @@ class RtxAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Reserved for future live monitoring
+        // Reserved for future
     }
 
     override fun onInterrupt() {
@@ -38,25 +38,43 @@ class RtxAccessibilityService : AccessibilityService() {
         return pkg == "net.metaquotes.metatrader5"
     }
 
-    fun performBuy(lotSize: Double? = null): Boolean {
+    fun performBuy(lotSize: Double? = null, sl: Double? = null, tp: Double? = null): Boolean {
         val root = rootInActiveWindow ?: return false
 
-        // আগে volume সেট করার চেষ্টা
         if (lotSize != null && lotSize > 0) {
             Mt5NodeFinder.setVolume(root, lotSize)
-            // একটু সময় দেওয়া ভালো
-            Thread.sleep(300)
+            Thread.sleep(250)
+        }
+
+        if (sl != null && sl > 0) {
+            Mt5AdvancedActions.trySetStopLoss(root, sl)
+            Thread.sleep(200)
+        }
+
+        if (tp != null && tp > 0) {
+            Mt5AdvancedActions.trySetTakeProfit(root, tp)
+            Thread.sleep(200)
         }
 
         return Mt5NodeFinder.performBuy(root)
     }
 
-    fun performSell(lotSize: Double? = null): Boolean {
+    fun performSell(lotSize: Double? = null, sl: Double? = null, tp: Double? = null): Boolean {
         val root = rootInActiveWindow ?: return false
 
         if (lotSize != null && lotSize > 0) {
             Mt5NodeFinder.setVolume(root, lotSize)
-            Thread.sleep(300)
+            Thread.sleep(250)
+        }
+
+        if (sl != null && sl > 0) {
+            Mt5AdvancedActions.trySetStopLoss(root, sl)
+            Thread.sleep(200)
+        }
+
+        if (tp != null && tp > 0) {
+            Mt5AdvancedActions.trySetTakeProfit(root, tp)
+            Thread.sleep(200)
         }
 
         return Mt5NodeFinder.performSell(root)
