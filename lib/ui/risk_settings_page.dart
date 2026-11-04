@@ -18,7 +18,9 @@ class _RiskSettingsPageState extends State<RiskSettingsPage> {
   final _riskController = TextEditingController();
   final _dailyLossController = TextEditingController();
   final _concurrentController = TextEditingController();
+  final _cooldownController = TextEditingController();
   bool _loading = true;
+  bool _autoTradeEnabled = false;
   String? _message;
 
   @override
@@ -32,15 +34,20 @@ class _RiskSettingsPageState extends State<RiskSettingsPage> {
     _riskController.dispose();
     _dailyLossController.dispose();
     _concurrentController.dispose();
+    _cooldownController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
     final s = await Store.riskSettings();
+    final autoTrade = await Store.autoTradeEnabled();
+    final cooldown = await Store.executionCooldownSeconds();
     setState(() {
       _riskController.text = (s.riskPercent * 100).toStringAsFixed(1);
       _dailyLossController.text = s.maxDailyLosses.toString();
       _concurrentController.text = s.maxConcurrentTrades.toString();
+      _cooldownController.text = cooldown.toString();
+      _autoTradeEnabled = autoTrade;
       _loading = false;
     });
   }
@@ -49,10 +56,12 @@ class _RiskSettingsPageState extends State<RiskSettingsPage> {
     final riskPct = (double.tryParse(_riskController.text.trim()) ?? 1.0) / 100;
     final dailyLoss = int.tryParse(_dailyLossController.text.trim()) ?? RiskDefaults.defaultMaxDailyLosses;
     final concurrent = int.tryParse(_concurrentController.text.trim()) ?? RiskDefaults.defaultMaxConcurrentTrades;
+    final cooldown = int.tryParse(_cooldownController.text.trim()) ?? Mt5Config.defaultCooldownSeconds;
 
     final clampedRisk = riskPct.clamp(0.001, RiskDefaults.maxRiskPercent);
     final clampedDailyLoss = dailyLoss.clamp(1, RiskDefaults.maxAllowedDailyLosses);
     final clampedConcurrent = concurrent.clamp(1, RiskDefaults.maxAllowedConcurrentTrades);
+    final clampedCooldown = cooldown.clamp(15, 300);
 
     final current = await Store.riskSettings();
     await Store.saveRiskSettings(RiskSettings(
@@ -62,11 +71,15 @@ class _RiskSettingsPageState extends State<RiskSettingsPage> {
       maxConcurrentTrades: clampedConcurrent.toInt(),
     ));
 
+    await Store.setAutoTradeEnabled(_autoTradeEnabled);
+    await Store.setExecutionCooldownSeconds(clampedCooldown);
+
     if (!mounted) return;
     setState(() {
       _riskController.text = (clampedRisk * 100).toStringAsFixed(1);
       _dailyLossController.text = clampedDailyLoss.toString();
       _concurrentController.text = clampedConcurrent.toString();
+      _cooldownController.text = clampedCooldown.toString();
       _message = 'সেভ হয়েছে ✅ (নিরাপত্তার জন্য সর্বোচ্চ সীমার মধ্যে রাখা হয়েছে)';
     });
   }
@@ -100,7 +113,37 @@ class _RiskSettingsPageState extends State<RiskSettingsPage> {
                     _field(_dailyLossController, 'Max Daily Losses', TextInputType.number),
                     const SizedBox(height: 12),
                     _field(_concurrentController, 'Max Concurrent Trades', TextInputType.number),
+                    const SizedBox(height: 12),
+                    _field(_cooldownController, 'Execution Cooldown (সেকেন্ড)', TextInputType.number),
                     const SizedBox(height: 20),
+
+                    // অটো ট্রেড টগল
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                      decoration: BoxDecoration(
+                        color: T.card,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: T.muted),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text('Auto Trade (MT5)', style: TextStyle(color: T.green, fontWeight: FontWeight.bold)),
+                          Switch(
+                            value: _autoTradeEnabled,
+                            activeColor: T.green,
+                            onChanged: (v) => setState(() => _autoTradeEnabled = v),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'চালু থাকলে সিগন্যাল পাওয়ার পর স্বয়ংক্রিয়ভাবে MT5-এ ট্রেড পাঠানোর চেষ্টা করবে (Accessibility চালু থাকতে হবে)।',
+                      style: TextStyle(color: T.dim, fontSize: 11),
+                    ),
+
+                    const SizedBox(height: 24),
                     ElevatedButton(
                       onPressed: _save,
                       style: ElevatedButton.styleFrom(backgroundColor: T.green, padding: const EdgeInsets.symmetric(vertical: 14)),
