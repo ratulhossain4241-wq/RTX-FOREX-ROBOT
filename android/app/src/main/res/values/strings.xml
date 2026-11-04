@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RTX Auto Trader</string>
+    <string name="accessibility_service_description">
+        RTX Auto Trader এই সার্ভিস ব্যবহার করে শুধুমাত্র MetaTrader 5 অ্যাপের ভিতরে Buy/Sell বাটন সনাক্ত করে এবং অটোমেটিক ট্রেড এক্সিকিউট করতে সাহায্য করে। অন্য কোনো অ্যাপের ডেটা পড়া বা নিয়ন্ত্রণ করা হয় না।
+    </string>
+</resources>
