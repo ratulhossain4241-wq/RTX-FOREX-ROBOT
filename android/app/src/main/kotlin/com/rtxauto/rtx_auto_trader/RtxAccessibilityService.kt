@@ -15,22 +15,24 @@ class RtxAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        Log.i(TAG, "RTX Accessibility Service Connected")
+        Log.i(TAG, "RTX Accessibility Service Connected Successfully")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // প্রয়োজন হলে পরে রিয়েল-টাইম মনিটরিং যোগ করা যাবে
+        // বর্তমানে শুধু ইভেন্ট রিসিভ করছি। পরে প্রয়োজন হলে এখানে লাইভ মনিটরিং যোগ করা যাবে।
     }
 
     override fun onInterrupt() {
-        Log.w(TAG, "Service Interrupted")
+        Log.w(TAG, "Accessibility Service Interrupted")
     }
 
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        Log.i(TAG, "Accessibility Service Destroyed")
     }
 
+    /** MetaTrader 5 বর্তমানে অ্যাকটিভ আছে কিনা */
     fun isMt5Active(): Boolean {
         val root = rootInActiveWindow ?: return false
         val pkg = root.packageName?.toString() ?: return false
@@ -53,10 +55,9 @@ class RtxAccessibilityService : AccessibilityService() {
     }
 
     fun getCurrentState(): Map<String, Any?> {
-        val root = rootInActiveWindow
         return mapOf(
             "isMt5" to isMt5Active(),
-            "hasRoot" to (root != null)
+            "hasRoot" to (rootInActiveWindow != null)
         )
     }
 }
