@@ -77,4 +77,36 @@ class Store {
 
   static Future<bool> autoMode() async =>
       (await _fresh()).getBool(PrefKeys.autoModeOn) ?? false;
+
+  // ═══════════════════════════════════════════════════════════════
+  // ===== নতুন মেথড (Hybrid Auto Trade এর জন্য) =====
+  // ═══════════════════════════════════════════════════════════════
+
+  /// Accessibility Service চালু আছে কিনা সেভ করে
+  static Future<void> setAccessibilityEnabled(bool enabled) async =>
+      (await _fresh()).setBool(PrefKeys.accessibilityEnabled, enabled);
+
+  static Future<bool> accessibilityEnabled() async =>
+      (await _fresh()).getBool(PrefKeys.accessibilityEnabled) ?? false;
+
+  /// অটো ট্রেড ফিচার আলাদা করে অন/অফ করার জন্য
+  static Future<void> setAutoTradeEnabled(bool enabled) async =>
+      (await _fresh()).setBool(PrefKeys.autoTradeEnabled, enabled);
+
+  static Future<bool> autoTradeEnabled() async =>
+      (await _fresh()).getBool(PrefKeys.autoTradeEnabled) ?? false;
+
+  /// শেষ যে সিগন্যাল আইডি এক্সিকিউট করা হয়েছে
+  static Future<void> setLastExecutedSignalId(String id) async =>
+      (await _fresh()).setString(PrefKeys.lastExecutedSignalId, id);
+
+  static Future<String> lastExecutedSignalId() async =>
+      (await _fresh()).getString(PrefKeys.lastExecutedSignalId) ?? '';
+
+  /// দুইটা ট্রেডের মধ্যে cooldown (সেকেন্ড)
+  static Future<void> setExecutionCooldownSeconds(int seconds) async =>
+      (await _fresh()).setInt(PrefKeys.executionCooldownSec, seconds);
+
+  static Future<int> executionCooldownSeconds() async =>
+      (await _fresh()).getInt(PrefKeys.executionCooldownSec) ?? Mt5Config.defaultCooldownSeconds;
 }
