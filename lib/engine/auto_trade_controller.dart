@@ -3,25 +3,19 @@ import '../core/models.dart';
 import '../core/risk_engine.dart';
 import '../core/store.dart';
 import '../core/trade_logger.dart';
+import '../core/pip_utils.dart';
 import 'signal_router.dart';
 
-/// সিগন্যাল পাওয়ার পর অটোমেটিকভাবে ট্রেড এক্সিকিউট করার কন্ট্রোলার।
-/// এটা overlay বা মেইন লজিক থেকে কল করা হয়।
-///
-/// কাজের ধাপ:
-/// 1. অটো ট্রেড মোড চালু আছে কিনা চেক
-/// 2. RiskEngine দিয়ে অনুমতি নেওয়া
-/// 3. Mt5Executor দিয়ে আসলে ক্লিক করানো
 class AutoTradeController {
-  /// একটি RouterSignal নিয়ে অটো এক্সিকিউশনের চেষ্টা করে।
   static Future<AutoTradeResult> tryAutoExecute({
     required RouterSignal signal,
     required String market,
     required String signalId,
   }) async {
-    // অটো মোড চালু আছে কিনা
     final autoOn = await Store.autoMode();
-    if (!autoOn) {
+    final autoTradeOn = await Store.autoTradeEnabled();
+
+    if (!autoOn || !autoTradeOn) {
       return const AutoTradeResult(
         executed: false,
         messageBn: 'অটো ট্রেড মোড বন্ধ আছে।',
@@ -44,9 +38,10 @@ class AutoTradeController {
       );
     }
 
-    // রিস্ক গেট
     final openTrades = await TradeLogger.openTrades();
-    final pipValue = 10.0; // পরে pip_utils থেকে সঠিক মান নেওয়া হবে
+    final entry = strat.entry ?? 0.0;
+    final pipValue = pipValuePerStandardLot(market, entry) ?? 10.0;
+
     final riskResult = await RiskEngine.canOpenNewTrade(
       currentOpenTradesCount: openTrades.length,
       slPips: signal.slPips ?? 0,
@@ -62,10 +57,9 @@ class AutoTradeController {
 
     final lot = riskResult.approvedLotSize ?? 0.01;
 
-    // আসলে এক্সিকিউট
     final exec = await Mt5Executor.executeSignal(
       direction: direction,
-      entryPrice: strat.entry ?? 0,
+      entryPrice: entry,
       slPrice: strat.sl ?? 0,
       tp1Price: strat.tp1 ?? 0,
       lotSize: lot,
