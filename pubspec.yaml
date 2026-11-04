@@ -1,7 +1,7 @@
 name: rtx_auto_trader
-description: RTX Auto Trader — Floating Bubble Trading Automation
+description: RTX Auto Trader — Floating Bubble Trading Automation with MT5 Auto Execution
 publish_to: "none"
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -16,6 +16,10 @@ dependencies:
   permission_handler: ^11.3.1
   sqflite: ^2.3.3+1
   path: ^1.9.0
+
+  # ===== নতুন যোগ করা হয়েছে (Hybrid Auto Trade এর জন্য) =====
+  # Accessibility Service কন্ট্রোল ও পারমিশন হ্যান্ডেল করার জন্য
+  # (নেটিভ সাইডে আলাদা Service থাকবে, এখানে শুধু Flutter সাইড সাপোর্ট)
 
 dev_dependencies:
   flutter_test:
