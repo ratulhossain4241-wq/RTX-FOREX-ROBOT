@@ -19,7 +19,7 @@ class RtxAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // বর্তমানে শুধু ইভেন্ট রিসিভ করছি। পরে প্রয়োজন হলে এখানে লাইভ মনিটরিং যোগ করা যাবে।
+        // Reserved for future live monitoring
     }
 
     override fun onInterrupt() {
@@ -32,20 +32,33 @@ class RtxAccessibilityService : AccessibilityService() {
         Log.i(TAG, "Accessibility Service Destroyed")
     }
 
-    /** MetaTrader 5 বর্তমানে অ্যাকটিভ আছে কিনা */
     fun isMt5Active(): Boolean {
         val root = rootInActiveWindow ?: return false
         val pkg = root.packageName?.toString() ?: return false
         return pkg == "net.metaquotes.metatrader5"
     }
 
-    fun performBuy(): Boolean {
+    fun performBuy(lotSize: Double? = null): Boolean {
         val root = rootInActiveWindow ?: return false
+
+        // আগে volume সেট করার চেষ্টা
+        if (lotSize != null && lotSize > 0) {
+            Mt5NodeFinder.setVolume(root, lotSize)
+            // একটু সময় দেওয়া ভালো
+            Thread.sleep(300)
+        }
+
         return Mt5NodeFinder.performBuy(root)
     }
 
-    fun performSell(): Boolean {
+    fun performSell(lotSize: Double? = null): Boolean {
         val root = rootInActiveWindow ?: return false
+
+        if (lotSize != null && lotSize > 0) {
+            Mt5NodeFinder.setVolume(root, lotSize)
+            Thread.sleep(300)
+        }
+
         return Mt5NodeFinder.performSell(root)
     }
 
