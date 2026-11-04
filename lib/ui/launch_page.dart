@@ -4,6 +4,7 @@ import '../core/constants.dart';
 import '../core/store.dart';
 import '../core/models.dart';
 import 'risk_settings_page.dart';
+import 'accessibility_permission_page.dart';
 
 class LaunchPage extends StatefulWidget {
   const LaunchPage({super.key});
@@ -179,7 +180,7 @@ class _LaunchPageState extends State<LaunchPage> {
               ),
               const SizedBox(height: 4),
               const Center(
-                child: Text('SETUP — API KEY, MARKET, RISK',
+                child: Text('SETUP — API KEY, MARKET, RISK + AUTO TRADE',
                     style: TextStyle(color: T.dim, fontSize: 10, letterSpacing: 1)),
               ),
               const SizedBox(height: 20),
@@ -227,6 +228,15 @@ class _LaunchPageState extends State<LaunchPage> {
               const SizedBox(height: 10),
               _outlineButton('⚙️ RISK SETTINGS (Risk %, Daily Loss, ইত্যাদি)', () {
                 Navigator.push(context, MaterialPageRoute(builder: (_) => const RiskSettingsPage()));
+              }),
+
+              const SizedBox(height: 24),
+              const _SectionTitle('AUTO TRADE (MT5)'),
+              _outlineButton('🔓 Accessibility Service সেটআপ', () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AccessibilityPermissionPage()),
+                );
               }),
 
               const SizedBox(height: 28),
