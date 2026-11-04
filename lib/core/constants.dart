@@ -74,7 +74,7 @@ class ApiConfig {
   static const String twelveDataBase = 'https://api.twelvedata.com/time_series';
   static const String geminiBase =
       'https://generativelanguage.googleapis.com/v1beta/models';
-  static const String geminiModel = 'gemini-3.6-flash'; // ব্যবহারের আগে AI Studio-তে নাম যাচাই করুন
+  static const String geminiModel = 'gemini-1.5-flash'; // ব্যবহারের আগে AI Studio-তে নাম যাচাই করুন
 }
 
 /// ───────────────── STORAGE KEYS ─────────────────
@@ -90,4 +90,28 @@ class PrefKeys {
   static const String dailyLossDate = 'daily_loss_date';
   static const String dailyLossCount = 'daily_loss_count';
   static const String autoModeOn = 'auto_mode_on';
+
+  // ===== নতুন Keys (Hybrid Auto Trade এর জন্য) =====
+  static const String accessibilityEnabled = 'accessibility_enabled';
+  static const String autoTradeEnabled = 'auto_trade_enabled';
+  static const String lastExecutedSignalId = 'last_executed_signal_id';
+  static const String executionCooldownSec = 'execution_cooldown_sec';
+}
+
+/// ───────────────── MT5 & ACCESSIBILITY ─────────────────
+/// MetaTrader 5 প্যাকেজ নাম এবং Accessibility সার্ভিস সংক্রান্ত কনস্ট্যান্ট।
+/// শুধু এই প্যাকেজটাকেই স্ক্যান করা হবে — অন্য কোনো অ্যাপ ছোঁয়া যাবে না।
+class Mt5Config {
+  /// অফিসিয়াল MetaTrader 5 প্যাকেজ নাম
+  static const String packageName = 'net.metaquotes.metatrader5';
+
+  /// Accessibility Service এর অনন্য ID (Manifest এর সাথে মিল রাখতে হবে)
+  static const String accessibilityServiceId =
+      'com.rtxauto.rtx_auto_trader/com.rtxauto.rtx_auto_trader.RtxAccessibilityService';
+
+  /// দুইটা ট্রেডের মধ্যে ন্যূনতম অপেক্ষা (সেকেন্ড) — ভুল করে বারবার ক্লিক এড়াতে
+  static const int defaultCooldownSeconds = 45;
+
+  /// স্ক্যান করার সময় ইন্টারভাল (মিলিসেকেন্ড)
+  static const int scanIntervalMs = 1200;
 }
