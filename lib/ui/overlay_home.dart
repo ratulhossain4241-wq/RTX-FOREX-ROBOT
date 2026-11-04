@@ -11,6 +11,8 @@ import '../core/market_hours.dart';
 import '../core/mode_meta.dart';
 import '../core/risk_engine.dart';
 import '../core/trade_logger.dart';
+import '../core/auto_trade_helper.dart';
+import '../core/accessibility_service.dart';
 import '../engine/signal_router.dart';
 import '../engine/signal_enricher.dart';
 import 'chart_painter.dart';
@@ -29,6 +31,8 @@ class _OverlayHomeState extends State<OverlayHome> {
   bool _scanning = false;
   bool _aiThinking = false;
   bool _autoMode = false;
+  bool _executing = false;
+  String? _executionMessage;
 
   MarketDef _market = kMarkets.first;
   List<Candle> _chartCandles = [];
@@ -47,12 +51,7 @@ class _OverlayHomeState extends State<OverlayHome> {
       if (mounted) setState(() => _time = DateFormat('HH:mm:ss').format(DateTime.now()));
     });
 
-    // ✅ ফিক্স: বাবল আর মেইন অ্যাপ দুইটা আলাদা Flutter engine-এ চলে,
-    // তাই মেইন অ্যাপে মার্কেট বদলালে বাবল সেটা স্বয়ংক্রিয়ভাবে জানতে
-    // পারে না। প্রতি ২ সেকেন্ডে SharedPreferences থেকে টাটকা মার্কেট
-    // চেক করে এই সমস্যা সমাধান করা হলো।
     _marketPollTimer = Timer.periodic(const Duration(seconds: 2), (_) => _pollMarket());
-
     _loadInitial();
   }
 
@@ -70,11 +69,11 @@ class _OverlayHomeState extends State<OverlayHome> {
       final next = kMarkets.firstWhere((m) => m.td == marketTd, orElse: () => kMarkets.first);
       setState(() {
         _market = next;
-        // মার্কেট বদলালে পুরনো সিগন্যাল/চার্ট আর প্রাসঙ্গিক না, তাই রিসেট করা হচ্ছে
         _lastSignal = null;
         _enriched = null;
         _chartCandles = [];
         _statusMessageBn = null;
+        _executionMessage = null;
       });
     }
   }
@@ -99,10 +98,6 @@ class _OverlayHomeState extends State<OverlayHome> {
     setState(() => _autoMode = next);
   }
 
-  /// ✅ ফিক্স: আগে এখানে showModalBottomSheet(SettingsSheet) খোলা হতো,
-  /// কিন্তু overlay window-এ সিস্টেম কীবোর্ড আসে না বলে টাইপ করা যেত
-  /// না। তাই এখন Risk Settings মেইন অ্যাপে সরানো হয়েছে — এখানে শুধু
-  /// একটা নির্দেশনা দেখানো হয়।
   void _showSettingsHint() {
     setState(() {
       _statusMessageBn =
@@ -116,6 +111,7 @@ class _OverlayHomeState extends State<OverlayHome> {
         _statusMessageBn = '🔴 Market Closed — খুলবে ${nextOpenDayLabel()}';
         _lastSignal = null;
         _enriched = null;
+        _executionMessage = null;
       });
       return;
     }
@@ -132,6 +128,7 @@ class _OverlayHomeState extends State<OverlayHome> {
       _lastSignal = null;
       _enriched = null;
       _riskBlockedReasonBn = null;
+      _executionMessage = null;
     });
 
     final fetch = await ApiClient.fetchAllTimeframes(apiKey: tdKey, symbol: _market.td);
@@ -205,6 +202,38 @@ class _OverlayHomeState extends State<OverlayHome> {
       _riskBlockedReasonBn = riskResult.blocked ? riskResult.reasonBn : null;
       _approvedLotSize = riskResult.approvedLotSize;
     });
+
+    // ===== অটো ট্রেড চেষ্টা =====
+    final autoTradeOn = await Store.autoTradeEnabled();
+    if (autoTradeOn && !riskResult.blocked && _autoMode) {
+      setState(() => _executing = true);
+      final msg = await AutoTradeHelper.tryExecuteFromOverlay(
+        signal: best,
+        market: _market.td,
+      );
+      if (!mounted) return;
+      setState(() {
+        _executing = false;
+        _executionMessage = msg;
+      });
+    }
+  }
+
+  Future<void> _manualExecute() async {
+    if (_lastSignal == null || _lastSignal!.noSignal) return;
+    setState(() {
+      _executing = true;
+      _executionMessage = null;
+    });
+    final msg = await AutoTradeHelper.tryExecuteFromOverlay(
+      signal: _lastSignal!,
+      market: _market.td,
+    );
+    if (!mounted) return;
+    setState(() {
+      _executing = false;
+      _executionMessage = msg;
+    });
   }
 
   @override
@@ -236,6 +265,17 @@ class _OverlayHomeState extends State<OverlayHome> {
                     _signalBox(),
                     const SizedBox(height: 8),
                     _statsRow(),
+                    if (_executionMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _executionMessage!,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: _executionMessage!.contains('সফল') ? T.green : T.gold,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -248,12 +288,6 @@ class _OverlayHomeState extends State<OverlayHome> {
     );
   }
 
-  /// ✅ ফিক্স: আগে একটাই Row-তে নাম + মার্কেট bge + settings আইকন +
-  /// সময় গাদাগাদি করে বসানো ছিল, ফলে সরু বাবল উইন্ডোতে Flexible/Spacer
-  /// এর flex হিসাব ঘেঁটে গিয়ে মার্কেট নাম কখনো প্রায় শূন্য জায়গা পেয়ে
-  /// দেখাই যাচ্ছিল না। এখন দুই সারিতে ভাগ করা হলো — নিচের সারিতে
-  /// Expanded দিয়ে মার্কেট bge পুরো প্রস্থ নিশ্চিত পায়, তাই আর কখনো
-  /// চেপে গিয়ে অদৃশ্য হবে না।
   Widget _header() {
     return Column(
       children: [
@@ -361,6 +395,13 @@ class _OverlayHomeState extends State<OverlayHome> {
             textAlign: TextAlign.center, style: TextStyle(color: T.cyan, fontWeight: FontWeight.bold, fontSize: 13)),
       );
     }
+    if (_executing) {
+      return const Padding(
+        padding: EdgeInsets.all(14),
+        child: Text('MT5-এ ট্রেড পাঠানো হচ্ছে...',
+            textAlign: TextAlign.center, style: TextStyle(color: T.gold, fontWeight: FontWeight.bold, fontSize: 13)),
+      );
+    }
     if (_statusMessageBn != null) {
       return Padding(
         padding: const EdgeInsets.all(14),
@@ -463,20 +504,43 @@ class _OverlayHomeState extends State<OverlayHome> {
   }
 
   Widget _actionRow() {
+    final canManualExecute = _lastSignal != null &&
+        !_lastSignal!.noSignal &&
+        _riskBlockedReasonBn == null &&
+        !_executing &&
+        !_scanning &&
+        !_aiThinking;
+
     return Row(
       children: [
         Expanded(
           child: GestureDetector(
-            onTap: (_scanning || _aiThinking) ? null : _generate,
+            onTap: (_scanning || _aiThinking || _executing) ? null : _generate,
             child: Container(
               padding: const EdgeInsets.symmetric(vertical: 13),
               decoration: BoxDecoration(color: T.green.withOpacity(0.15), borderRadius: BorderRadius.circular(10), border: Border.all(color: T.green)),
               child: Center(
                 child: Text(
-                  _scanning ? 'SCAN...' : (_aiThinking ? 'AI...' : '🚀 SIGNAL'),
+                  _scanning ? 'SCAN...' : (_aiThinking ? 'AI...' : (_executing ? 'EXEC...' : '🚀 SIGNAL')),
                   style: const TextStyle(color: T.green, fontWeight: FontWeight.w900, fontSize: 14),
                 ),
               ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: canManualExecute ? _manualExecute : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            decoration: BoxDecoration(
+              color: canManualExecute ? T.gold.withOpacity(0.15) : T.card,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: canManualExecute ? T.gold : T.muted),
+            ),
+            child: Text(
+              '⚡',
+              style: TextStyle(fontSize: 16, color: canManualExecute ? T.gold : T.muted),
             ),
           ),
         ),
