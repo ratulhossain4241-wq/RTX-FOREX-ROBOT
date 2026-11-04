@@ -80,12 +80,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expected = "\( packageName/ \){RtxAccessibilityService::class.java.canonicalName}"
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-
-        return enabledServices.split(':').any { it.equals(expected, ignoreCase = true) }
+        return AccessibilityHelper.isServiceEnabled(this)
     }
 }
